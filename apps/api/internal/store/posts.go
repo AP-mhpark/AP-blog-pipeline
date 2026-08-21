@@ -11,17 +11,19 @@ import (
 	"blog-pipeline-api/internal/pipeline"
 )
 
-// Post mirrors a row in the posts table.
+// Post mirrors a row in the posts table. JSON tags use snake_case to match
+// the DB columns and the rest of the HTTP API's request bodies.
 type Post struct {
-	ID                   string
-	ContentType          pipeline.ContentType
-	Category             string
-	Subtype              *string
-	InputMethod          pipeline.InputMethod
-	InputKeyword         *string
-	Status               pipeline.Status
-	StatusErrorMessage   *string
-	CreatedAt, UpdatedAt time.Time
+	ID                 string               `json:"id"`
+	ContentType        pipeline.ContentType `json:"content_type"`
+	Category           string               `json:"category"`
+	Subtype            *string              `json:"subtype"`
+	InputMethod        pipeline.InputMethod `json:"input_method"`
+	InputKeyword       *string              `json:"input_keyword"`
+	Status             pipeline.Status      `json:"status"`
+	StatusErrorMessage *string              `json:"status_error_message"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 // CreatePostParams are the fields needed to create a post. Status is set by
@@ -29,30 +31,49 @@ type Post struct {
 // pipeline.StatusResearching, file input starts at pipeline.StatusResearched
 // or pipeline.StatusFailedFileParsing depending on whether parsing
 // succeeded — that decision belongs to the handler/pipeline layer, not the
-// store.
+// store. StatusErrorMessage covers the failed_file_parsing-at-creation case.
 type CreatePostParams struct {
-	ContentType  pipeline.ContentType
-	Category     string
-	Subtype      *string
-	InputMethod  pipeline.InputMethod
-	InputKeyword *string
-	Status       pipeline.Status
+	ContentType        pipeline.ContentType
+	Category           string
+	Subtype            *string
+	InputMethod        pipeline.InputMethod
+	InputKeyword       *string
+	Status             pipeline.Status
+	StatusErrorMessage *string
 }
 
-// CreatePost inserts a new post and returns the stored row.
+// CreatePost inserts a new post and its initial status_transitions audit row
+// (from_status = NULL) atomically, and returns the stored post.
 func (s *Store) CreatePost(ctx context.Context, p CreatePostParams) (Post, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Post{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	var post Post
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO posts (content_type, category, subtype, input_method, input_keyword, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO posts (content_type, category, subtype, input_method, input_keyword, status, status_error_message)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id::text, content_type, category, subtype, input_method, input_keyword,
 		          status, status_error_message, created_at, updated_at
-	`, p.ContentType, p.Category, p.Subtype, p.InputMethod, p.InputKeyword, p.Status).Scan(
+	`, p.ContentType, p.Category, p.Subtype, p.InputMethod, p.InputKeyword, p.Status, p.StatusErrorMessage).Scan(
 		&post.ID, &post.ContentType, &post.Category, &post.Subtype, &post.InputMethod, &post.InputKeyword,
 		&post.Status, &post.StatusErrorMessage, &post.CreatedAt, &post.UpdatedAt,
 	)
 	if err != nil {
 		return Post{}, fmt.Errorf("create post: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO status_transitions (post_id, from_status, to_status, error_message)
+		VALUES ($1, NULL, $2, $3)
+	`, post.ID, post.Status, post.StatusErrorMessage); err != nil {
+		return Post{}, fmt.Errorf("insert initial status transition: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Post{}, fmt.Errorf("commit: %w", err)
 	}
 	return post, nil
 }
