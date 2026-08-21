@@ -9,12 +9,12 @@ import (
 
 // UploadedFile mirrors a row in the uploaded_files table.
 type UploadedFile struct {
-	ID               string
-	PostID           string
-	OriginalFilename string
-	FileType         string // "pdf" | "xlsx"
-	StoragePath      string
-	UploadedAt       time.Time
+	ID               string    `json:"id"`
+	PostID           string    `json:"post_id"`
+	OriginalFilename string    `json:"original_filename"`
+	FileType         string    `json:"file_type"` // "pdf" | "xlsx"
+	StoragePath      string    `json:"storage_path"`
+	UploadedAt       time.Time `json:"uploaded_at"`
 }
 
 // CreateUploadedFile records an uploaded PDF/Excel file for a post.
@@ -35,12 +35,12 @@ func (s *Store) CreateUploadedFile(ctx context.Context, postID, originalFilename
 
 // ResearchResult mirrors a row in the research_results table.
 type ResearchResult struct {
-	ID            string
-	PostID        string
-	Source        string // "naver_datalab" | "file_upload"
-	RawData       json.RawMessage
-	ExtractedText *string
-	CreatedAt     time.Time
+	ID            string          `json:"id"`
+	PostID        string          `json:"post_id"`
+	Source        string          `json:"source"` // "naver_datalab" | "file_upload"
+	RawData       json.RawMessage `json:"raw_data"`
+	ExtractedText *string         `json:"extracted_text"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 // CreateResearchResult records trend-research or extracted-file data for a post.
@@ -61,14 +61,14 @@ func (s *Store) CreateResearchResult(ctx context.Context, postID, source string,
 
 // Draft mirrors a row in the drafts table.
 type Draft struct {
-	ID              string
-	PostID          string
-	Version         int
-	Content         string
-	MetaTitle       *string
-	MetaDescription *string
-	ImageAlts       json.RawMessage
-	CreatedAt       time.Time
+	ID              string          `json:"id"`
+	PostID          string          `json:"post_id"`
+	Version         int             `json:"version"`
+	Content         string          `json:"content"`
+	MetaTitle       *string         `json:"meta_title"`
+	MetaDescription *string         `json:"meta_description"`
+	ImageAlts       json.RawMessage `json:"image_alts"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 // CreateDraft records a generated draft (with its SEO metadata) for a post.
@@ -89,12 +89,12 @@ func (s *Store) CreateDraft(ctx context.Context, postID string, version int, con
 
 // ReviewAction mirrors a row in the review_actions table.
 type ReviewAction struct {
-	ID           string
-	PostID       string
-	DraftID      string
-	Action       string // "approve" | "reject"
-	FeedbackNote *string
-	CreatedAt    time.Time
+	ID           string    `json:"id"`
+	PostID       string    `json:"post_id"`
+	DraftID      string    `json:"draft_id"`
+	Action       string    `json:"action"` // "approve" | "reject"
+	FeedbackNote *string   `json:"feedback_note"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // CreateReviewAction records an approve/reject decision on a draft.

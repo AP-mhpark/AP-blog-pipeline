@@ -44,6 +44,19 @@ PostgreSQL. 스키마 전문은 `apps/api/migrations/0001_init_schema.up.sql`에
 
 각각 `internal/external/{naverdatalab,llm,fileparser}`에서 래핑한다.
 
+## REST API
+
+`internal/handler`가 노출하는 엔드포인트(Go 1.22+ 표준 `net/http` 패턴 매칭 라우팅, 별도 라우터 라이브러리 없음):
+
+| 메서드/경로 | 설명 |
+|---|---|
+| `GET /posts` | 전체 목록 |
+| `GET /posts/{id}` | 단건 조회 (없으면 404) |
+| `POST /posts` | 키워드 입력 생성 (`content_type`, `category`, `subtype?`, `keyword` JSON). `status=researching`으로 생성만 하고 끝 — **네이버 데이터랩 조사 실행은 아직 없음**(스텁), 상태가 자동으로 진행되지 않는다 |
+| `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장 |
+
+`pending_review` 이후(승인/반려/보관) 엔드포인트는 아직 없다 — 드래프팅(LLM 초안 생성) 단계가 없어 그 상태에 실제로 도달할 수 없어서 다음 단계로 미룸.
+
 ## 테스트
 
 - 일반 유닛 테스트: `go test ./...`
@@ -63,4 +76,4 @@ migrate -path apps/api/migrations -database "$DATABASE_URL" up
 go run ./cmd/server
 ```
 
-`.env.example`을 복사해 `.env`를 만들고 값을 채운다(`DATABASE_URL`, `NAVER_DATALAB_CLIENT_ID/SECRET`, `ANTHROPIC_API_KEY`).
+`.env.example`을 복사해 `.env`를 만들고 값을 채운다(`DATABASE_URL`, `UPLOAD_DIR`, `NAVER_DATALAB_CLIENT_ID/SECRET`, `ANTHROPIC_API_KEY`).

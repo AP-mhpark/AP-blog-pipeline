@@ -1,12 +1,34 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"os"
+
+	"blog-pipeline-api/internal/handler"
+	"blog-pipeline-api/internal/store"
 )
 
 func main() {
-	mux := http.NewServeMux()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+	uploadDir := os.Getenv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "./uploads"
+	}
+
+	ctx := context.Background()
+	s, err := store.New(ctx, dsn)
+	if err != nil {
+		log.Fatalf("connect to db: %v", err)
+	}
+	defer s.Close()
+
+	h := handler.New(s, uploadDir)
+	mux := h.Routes()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))

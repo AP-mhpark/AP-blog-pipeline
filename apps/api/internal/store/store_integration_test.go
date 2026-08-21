@@ -27,7 +27,7 @@ func TestStoreIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	pg := embeddedpostgres.NewDatabase(
-		embeddedpostgres.DefaultConfig().Port(integrationPort).Logger(io.Discard),
+		embeddedpostgres.DefaultConfig().Port(integrationPort).RuntimePath(t.TempDir()).Logger(io.Discard),
 	)
 	if err := pg.Start(); err != nil {
 		t.Fatalf("start embedded postgres: %v", err)
