@@ -40,8 +40,14 @@ export interface Draft {
   content: string;
   meta_title: string | null;
   meta_description: string | null;
-  image_alts: string[] | null;
+  used_images: string[] | null; // filenames of extracted PDF images referenced in content
   created_at: string;
+}
+
+// Builds the URL for an image extracted from a source PDF (see
+// fileparser.ExtractPDFImages / UPLOAD_DIR/images on the API side).
+export function extractedImageUrl(filename: string): string {
+  return `${API_BASE_URL}/uploads/images/${filename}`;
 }
 
 class ApiError extends Error {}

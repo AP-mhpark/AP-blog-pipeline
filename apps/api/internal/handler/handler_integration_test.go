@@ -163,7 +163,7 @@ func TestHandlerIntegration(t *testing.T) {
 			Content:         "본문 초안",
 			MetaTitle:       "테스트 제목",
 			MetaDescription: "테스트 설명",
-			ImageAlts:       []string{"대체텍스트1"},
+			UsedImages:      []string{"img1.png"},
 		}
 		fakeBlogSearcher.err = nil
 		fakeBlogSearcher.results = []naversearch.BlogResult{

@@ -90,7 +90,7 @@ type Draft struct {
 	Content         string          `json:"content"`
 	MetaTitle       *string         `json:"meta_title"`
 	MetaDescription *string         `json:"meta_description"`
-	ImageAlts       json.RawMessage `json:"image_alts"`
+	UsedImages      json.RawMessage `json:"used_images"` // stored in the image_alts DB column; holds extracted-image filenames the draft referenced
 	CreatedAt       time.Time       `json:"created_at"`
 }
 
@@ -102,7 +102,7 @@ func (s *Store) CreateDraft(ctx context.Context, postID string, version int, con
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id::text, post_id::text, version, content, meta_title, meta_description, image_alts, created_at
 	`, postID, version, content, metaTitle, metaDescription, imageAlts).Scan(
-		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.UsedImages, &d.CreatedAt,
 	)
 	if err != nil {
 		return Draft{}, fmt.Errorf("create draft: %w", err)
@@ -133,7 +133,7 @@ func (s *Store) GetLatestDraft(ctx context.Context, postID string) (Draft, error
 		FROM drafts WHERE post_id = $1
 		ORDER BY version DESC LIMIT 1
 	`, postID).Scan(
-		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.UsedImages, &d.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -160,7 +160,7 @@ func (s *Store) ListDrafts(ctx context.Context, postID string) ([]Draft, error) 
 	for rows.Next() {
 		var d Draft
 		if err := rows.Scan(
-			&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+			&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.UsedImages, &d.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan draft: %w", err)
 		}

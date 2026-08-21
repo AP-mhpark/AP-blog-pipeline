@@ -40,6 +40,12 @@ PostgreSQL. 스키마 전문은 `apps/api/migrations/0001_init_schema.up.sql`에
 |---|---|---|
 | 트렌드/키워드 조사 | 네이버 데이터랩 API | 1차 채택. 구글 트렌드는 공식 API 없음 — 필요 시 `pytrends` 등 비공식 라이브러리 검토(안정성 낮음) |
 | 상위노출 제목/스니펫 조회 | 네이버 검색 API(`openapi.naver.com/v1/search/blog.json`) | 드래프팅에서 SEO 제목·어조를 참고하기 위해 상위노출 블로그의 제목+스니펫을 조회. 본문 전체는 가져오지 않음(네이버 블로그 iframe 렌더링이라 스크래핑이 까다롭고, 타 콘텐츠 대량 수집이라 스니펫 대비 리스크가 큼). 데이터랩과 같은 네이버 앱 자격증명(`NAVER_CLIENT_ID/SECRET`) 공유 — 단, 아래 "네이버 API 발급 제약" 참고 |
+| 초안/분석 생성 | `github.com/anthropics/anthropic-sdk-go` (Anthropic Claude API) | 공식 SDK, 활발히 관리됨. 200k 토큰 컨텍스트라 PDF/엑셀 전문을 통째로 넣기 유리하고, tool use로 구조화된 출력(meta_title/description/used_images)을 안정적으로 받을 수 있음 |
+| PDF 텍스트/표 추출 | `github.com/razvandimescu/gopdf` | MIT, 순수 Go, 외부 의존성 0, 표 추출(rows/columns) 지원 — 청약 공고의 소득기준표·공급일정표 추출에 적합. `unidoc/unipdf`는 기능은 강력하지만 AGPL/상용 이중 라이선스라 배제 |
+| PDF 내장 이미지 추출 | `github.com/pdfcpu/pdfcpu` | 순수 Go, 활발히 관리됨. `api.ExtractImagesFile`로 PDF에 실제 임베드된 이미지(사진·지도 등)를 뽑아 드래프팅에 활용. 표는 대개 이미지가 아니라 PDF 네이티브 텍스트+선이라 이걸로 안 뽑힘 — 표는 대신 LLM이 마크다운 표로 작성 |
+| 엑셀 파싱 | `github.com/xuri/excelize/v2` | 사실상 Go 생태계 표준, 활발히 관리됨 |
+
+각각 `internal/external/{naverdatalab,naversearch,llm,fileparser}`에서 래핑한다.
 
 ### 네이버 API 발급 제약 (2026-08 확인)
 
@@ -54,11 +60,6 @@ developers.naver.com "API 제휴 신청" 페이지 기준:
 
 - **상위노출 참고(제목/어조)**: 당장은 Claude 자체 지식으로만 생성(이미 그렇게 동작 중, non-fatal). 필요하면 나중에 "사용자가 네이버에서 직접 검색해 상위 제목 몇 개를 붙여넣는" 수동 입력 필드를 드래프팅 요청에 추가하는 방향을 검토 — API 없이도 같은 효과. **검색 결과 페이지(SERP) 스크래핑은 하지 않는다** — ToS 위반 소지가 있고, 본문 스크래핑을 배제한 것과 같은 이유로 배제.
 - **트렌드/키워드 조사**: `pytrends`(비공식) 검토는 이미 CLAUDE.md에 명시돼 있음. 다만 file_input(PDF/엑셀) 경로가 이미 우선 검증된 핵심 흐름이라, keyword_input 자동 조사는 급하지 않음 — 사용자가 키워드를 직접 입력하는 현재 방식으로 계속 진행 가능.
-| 초안/분석 생성 | `github.com/anthropics/anthropic-sdk-go` (Anthropic Claude API) | 공식 SDK, 활발히 관리됨. 200k 토큰 컨텍스트라 PDF/엑셀 전문을 통째로 넣기 유리하고, tool use로 구조화된 출력(meta_title/description/image_alts)을 안정적으로 받을 수 있음 |
-| PDF 텍스트/표 추출 | `github.com/razvandimescu/gopdf` | MIT, 순수 Go, 외부 의존성 0, 표 추출(rows/columns) 지원 — 청약 공고의 소득기준표·공급일정표 추출에 적합. `unidoc/unipdf`는 기능은 강력하지만 AGPL/상용 이중 라이선스라 배제 |
-| 엑셀 파싱 | `github.com/xuri/excelize/v2` | 사실상 Go 생태계 표준, 활발히 관리됨 |
-
-각각 `internal/external/{naverdatalab,naversearch,llm,fileparser}`에서 래핑한다.
 
 ## REST API
 
@@ -70,9 +71,10 @@ developers.naver.com "API 제휴 신청" 페이지 기준:
 | `GET /posts/{id}` | 단건 조회 (없으면 404) |
 | `DELETE /posts/{id}` | 삭제(204). 관련 데이터(업로드 파일 레코드, 조사 결과, 초안, 리뷰 기록, 상태 이력)는 FK `ON DELETE CASCADE`로 함께 삭제. 상태 제한 없음(1인용 내부 툴이라 테스트/실수 데이터를 언제든 지울 수 있어야 함) |
 | `POST /posts` | 키워드 입력 생성 (`content_type`, `category`, `subtype?`, `keyword` JSON). `status=researching`으로 생성만 하고 끝 — **네이버 데이터랩 조사 실행은 아직 없음**(스텁), 상태가 자동으로 진행되지 않는다 |
-| `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장 |
-| `POST /posts/{id}/draft` | 초안 생성/재생성. `researched`/`needs_revision` 상태에서만 가능(그 외 400). `naversearch`로 상위노출 제목/스니펫 조회(실패해도 무시하고 진행 — 보강 기능이라 단일 장애점 아님) → `llm.GenerateDraft`(Anthropic tool_use로 구조화된 출력) → 성공 시 `drafts`에 새 버전 저장 후 `draft_ready`→`pending_review`까지 자동 연쇄 전이. LLM 호출 실패는 치명적(`failed_drafting` + 에러 메시지, 502) |
-| `GET /posts/{id}/drafts` | 해당 글의 모든 초안 버전(최신순) |
+| `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장. PDF는 텍스트와 함께 내장 이미지도 추출(`fileparser.ExtractPDFImages`, 비치명적) → `research_results.raw_data`에 `{"images": [...]}`로 기록 |
+| `POST /posts/{id}/draft` | 초안 생성/재생성. `researched`/`needs_revision` 상태에서만 가능(그 외 400). `naversearch`로 상위노출 제목/스니펫 조회(실패해도 무시하고 진행 — 보강 기능이라 단일 장애점 아님) → `llm.GenerateDraft`(Anthropic tool_use로 구조화된 출력, 추출된 이미지 파일명 목록도 함께 전달) → 성공 시 `drafts`에 새 버전 저장 후 `draft_ready`→`pending_review`까지 자동 연쇄 전이. LLM 호출 실패는 치명적(`failed_drafting` + 에러 메시지, 502) |
+| `GET /posts/{id}/drafts` | 해당 글의 모든 초안 버전(최신순). `used_images` 필드에 본문에서 실제 참조한 추출 이미지 파일명 목록(DB 컬럼명은 `image_alts` 그대로, 마이그레이션 없이 의미만 재정의) |
+| `GET /uploads/{path}` | 업로드 원본 파일 + 추출 이미지 정적 서빙(`UPLOAD_DIR` 그대로 노출). 인증 없는 1인용 툴이고 원문이 공개 공고문이라 문제 없음 |
 | `POST /posts/{id}/approve` | `pending_review`→`approved`. 초안이 없으면 422, 상태가 안 맞으면 400. `review_actions`에 `approve` 기록 |
 | `POST /posts/{id}/reject` | `pending_review`→`needs_revision` (JSON body `{"feedback_note"?: string}`). `review_actions`에 `reject`+피드백 기록. 재생성은 기존 `POST /posts/{id}/draft` 재사용(`needs_revision`→`drafting` 지원) |
 | `POST /posts/{id}/archive` | `approved`→`archived` — 사용자가 네이버 에디터에 수동 업로드 완료했다는 표시. `review_actions` 관여 없음 |
