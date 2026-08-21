@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 
+	"blog-pipeline-api/internal/external/llm"
+	"blog-pipeline-api/internal/external/naversearch"
 	"blog-pipeline-api/internal/handler"
 	"blog-pipeline-api/internal/store"
 )
@@ -27,7 +29,10 @@ func main() {
 	}
 	defer s.Close()
 
-	h := handler.New(s, uploadDir)
+	llmClient := llm.NewClient(os.Getenv("ANTHROPIC_API_KEY"))
+	searchClient := naversearch.NewClient(os.Getenv("NAVER_CLIENT_ID"), os.Getenv("NAVER_CLIENT_SECRET"))
+
+	h := handler.New(s, uploadDir, llmClient, searchClient)
 	mux := h.Routes()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

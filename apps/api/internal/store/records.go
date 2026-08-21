@@ -3,8 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // UploadedFile mirrors a row in the uploaded_files table.
@@ -59,6 +62,26 @@ func (s *Store) CreateResearchResult(ctx context.Context, postID, source string,
 	return r, nil
 }
 
+// GetLatestResearchResult fetches the most recently created research_results
+// row for a post. Returns ErrNotFound if the post has none yet.
+func (s *Store) GetLatestResearchResult(ctx context.Context, postID string) (ResearchResult, error) {
+	var r ResearchResult
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, post_id::text, source, raw_data, extracted_text, created_at
+		FROM research_results WHERE post_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`, postID).Scan(
+		&r.ID, &r.PostID, &r.Source, &r.RawData, &r.ExtractedText, &r.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ResearchResult{}, ErrNotFound
+		}
+		return ResearchResult{}, fmt.Errorf("get latest research result: %w", err)
+	}
+	return r, nil
+}
+
 // Draft mirrors a row in the drafts table.
 type Draft struct {
 	ID              string          `json:"id"`
@@ -85,6 +108,20 @@ func (s *Store) CreateDraft(ctx context.Context, postID string, version int, con
 		return Draft{}, fmt.Errorf("create draft: %w", err)
 	}
 	return d, nil
+}
+
+// NextDraftVersion returns the version number to use for a post's next
+// draft: 1 if it has none yet, otherwise one more than its current max
+// (each pass through the revision loop produces a new version).
+func (s *Store) NextDraftVersion(ctx context.Context, postID string) (int, error) {
+	var next int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0) + 1 FROM drafts WHERE post_id = $1
+	`, postID).Scan(&next)
+	if err != nil {
+		return 0, fmt.Errorf("next draft version: %w", err)
+	}
+	return next, nil
 }
 
 // ReviewAction mirrors a row in the review_actions table.
