@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -22,9 +23,33 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/razvandimescu/gopdf/pdf"
 
+	"blog-pipeline-api/internal/external/llm"
+	"blog-pipeline-api/internal/external/naversearch"
 	"blog-pipeline-api/internal/handler"
 	"blog-pipeline-api/internal/store"
 )
+
+// fakeLLM and fakeSearcher stand in for the real Anthropic/Naver clients so
+// the orchestration (status transitions, versioning, error handling) can be
+// tested without real API credentials. Their fields are mutated between
+// subtests, which run sequentially (no t.Parallel).
+type fakeLLM struct {
+	output llm.DraftOutput
+	err    error
+}
+
+func (f *fakeLLM) GenerateDraft(ctx context.Context, in llm.DraftInput) (llm.DraftOutput, error) {
+	return f.output, f.err
+}
+
+type fakeSearcher struct {
+	results []naversearch.BlogResult
+	err     error
+}
+
+func (f *fakeSearcher) SearchBlogs(ctx context.Context, query string, display int) ([]naversearch.BlogResult, error) {
+	return f.results, f.err
+}
 
 const integrationPort = 15433
 
@@ -52,7 +77,9 @@ func TestHandlerIntegration(t *testing.T) {
 	}
 	defer s.Close()
 
-	h := handler.New(s, t.TempDir())
+	fakeGenerator := &fakeLLM{}
+	fakeBlogSearcher := &fakeSearcher{}
+	h := handler.New(s, t.TempDir(), fakeGenerator, fakeBlogSearcher)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -127,6 +154,105 @@ func TestHandlerIntegration(t *testing.T) {
 			t.Fatalf("got status %v, want failed_file_parsing", post["status"])
 		}
 	})
+
+	t.Run("draft succeeds and reaches pending_review", func(t *testing.T) {
+		researchedID := uploadResearchedPost(t, srv)
+
+		fakeGenerator.err = nil
+		fakeGenerator.output = llm.DraftOutput{
+			Content:         "본문 초안",
+			MetaTitle:       "테스트 제목",
+			MetaDescription: "테스트 설명",
+			ImageAlts:       []string{"대체텍스트1"},
+		}
+		fakeBlogSearcher.err = nil
+		fakeBlogSearcher.results = []naversearch.BlogResult{
+			{Title: "참고 제목", Description: "참고 스니펫"},
+		}
+
+		var draft map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+researchedID+"/draft", nil, http.StatusCreated, &draft)
+		if draft["version"] != float64(1) {
+			t.Fatalf("got version %v, want 1", draft["version"])
+		}
+		if draft["content"] != "본문 초안" {
+			t.Fatalf("got content %v", draft["content"])
+		}
+
+		var post map[string]any
+		doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/posts/"+researchedID, nil, http.StatusOK, &post)
+		if post["status"] != "pending_review" {
+			t.Fatalf("got status %v, want pending_review", post["status"])
+		}
+	})
+
+	t.Run("draft fails when llm errors, lands on failed_drafting", func(t *testing.T) {
+		researchedID := uploadResearchedPost(t, srv)
+
+		fakeGenerator.err = errors.New("anthropic: rate limited")
+		fakeBlogSearcher.err = nil
+		fakeBlogSearcher.results = nil
+
+		resp, err := srv.Client().Post(srv.URL+"/posts/"+researchedID+"/draft", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadGateway {
+			t.Fatalf("got status %d, want 502", resp.StatusCode)
+		}
+
+		var post map[string]any
+		doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/posts/"+researchedID, nil, http.StatusOK, &post)
+		if post["status"] != "failed_drafting" {
+			t.Fatalf("got status %v, want failed_drafting", post["status"])
+		}
+		if post["status_error_message"] == nil {
+			t.Fatal("expected status_error_message to be set")
+		}
+	})
+
+	t.Run("draft succeeds even if naver search fails (non-fatal)", func(t *testing.T) {
+		researchedID := uploadResearchedPost(t, srv)
+
+		fakeGenerator.err = nil
+		fakeGenerator.output = llm.DraftOutput{
+			Content:         "본문 초안 2",
+			MetaTitle:       "테스트 제목 2",
+			MetaDescription: "테스트 설명 2",
+		}
+		fakeBlogSearcher.err = errors.New("naver: timeout")
+		fakeBlogSearcher.results = nil
+
+		var draft map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+researchedID+"/draft", nil, http.StatusCreated, &draft)
+		if draft["content"] != "본문 초안 2" {
+			t.Fatalf("got content %v, want draft despite search failure", draft["content"])
+		}
+	})
+}
+
+// uploadResearchedPost uploads a fresh valid PDF and returns the resulting
+// post's ID (status researched).
+func uploadResearchedPost(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	resp := uploadFile(t, srv.Client(), srv.URL, "notice.pdf", makeTestPDF(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: got status %d, want 201", resp.StatusCode)
+	}
+	var post map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&post); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if post["status"] != "researched" {
+		t.Fatalf("got status %v, want researched", post["status"])
+	}
+	id, _ := post["id"].(string)
+	if id == "" {
+		t.Fatal("expected a generated ID")
+	}
+	return id
 }
 
 func uploadFile(t *testing.T, client *http.Client, baseURL, filename string, content []byte) *http.Response {

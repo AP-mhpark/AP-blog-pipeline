@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,21 +17,37 @@ import (
 	"time"
 
 	"blog-pipeline-api/internal/external/fileparser"
+	"blog-pipeline-api/internal/external/llm"
+	"blog-pipeline-api/internal/external/naversearch"
 	"blog-pipeline-api/internal/pipeline"
 	"blog-pipeline-api/internal/store"
 )
 
 const maxUploadBytes = 20 << 20 // 20MB
 
+// draftGenerator is satisfied by *llm.Client. A narrow interface so tests
+// can inject a fake instead of making real Anthropic API calls.
+type draftGenerator interface {
+	GenerateDraft(ctx context.Context, in llm.DraftInput) (llm.DraftOutput, error)
+}
+
+// blogSearcher is satisfied by *naversearch.Client. A narrow interface so
+// tests can inject a fake instead of making real Naver API calls.
+type blogSearcher interface {
+	SearchBlogs(ctx context.Context, query string, display int) ([]naversearch.BlogResult, error)
+}
+
 // Handler holds the dependencies HTTP handlers need.
 type Handler struct {
 	store     *store.Store
 	uploadDir string
+	llm       draftGenerator
+	searcher  blogSearcher
 }
 
 // New creates a Handler. uploadDir is where uploaded files are saved.
-func New(s *store.Store, uploadDir string) *Handler {
-	return &Handler{store: s, uploadDir: uploadDir}
+func New(s *store.Store, uploadDir string, llmClient draftGenerator, searcher blogSearcher) *Handler {
+	return &Handler{store: s, uploadDir: uploadDir, llm: llmClient, searcher: searcher}
 }
 
 // Routes registers all endpoints on a fresh ServeMux.
@@ -40,6 +57,7 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /posts/{id}", h.getPost)
 	mux.HandleFunc("POST /posts", h.createKeywordPost)
 	mux.HandleFunc("POST /posts/upload", h.uploadFilePost)
+	mux.HandleFunc("POST /posts/{id}/draft", h.draftPost)
 	return mux
 }
 
@@ -223,6 +241,138 @@ func (h *Handler) uploadFilePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, post)
+}
+
+// draftPost generates (or regenerates, on the revision loop) a draft for a
+// post: researched/needs_revision -> drafting -> draft_ready -> pending_review.
+// The Naver search reference lookup is best-effort — a failure there logs
+// and continues without reference titles/snippets rather than failing the
+// whole request, since it's a quality enhancement, not the core step. The
+// LLM call is the load-bearing step: its failure lands the post on
+// failed_drafting.
+func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := r.PathValue("id")
+
+	post, err := h.store.GetPost(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "post not found")
+			return
+		}
+		log.Printf("draftPost: get post: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to get post")
+		return
+	}
+
+	if err := h.store.UpdateStatus(ctx, id, pipeline.StatusDrafting, nil); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot start drafting: %v", err))
+		return
+	}
+
+	research, err := h.store.GetLatestResearchResult(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			msg := "no research data available for this post"
+			h.failDrafting(ctx, id, msg)
+			writeError(w, http.StatusUnprocessableEntity, msg)
+			return
+		}
+		log.Printf("draftPost: get research result: %v", err)
+		h.failDrafting(ctx, id, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to load research data")
+		return
+	}
+	var sourceText string
+	if research.ExtractedText != nil {
+		sourceText = *research.ExtractedText
+	}
+
+	var titles, snippets []string
+	if results, err := h.searcher.SearchBlogs(ctx, searchQueryFor(post), 5); err != nil {
+		log.Printf("draftPost: naver search (non-fatal): %v", err)
+	} else {
+		for _, res := range results {
+			titles = append(titles, res.Title)
+			snippets = append(snippets, res.Description)
+		}
+	}
+
+	var subtype string
+	if post.Subtype != nil {
+		subtype = *post.Subtype
+	}
+	draftOut, err := h.llm.GenerateDraft(ctx, llm.DraftInput{
+		Category:          post.Category,
+		Subtype:           subtype,
+		ContentType:       string(post.ContentType),
+		SourceText:        sourceText,
+		ReferenceTitles:   titles,
+		ReferenceSnippets: snippets,
+	})
+	if err != nil {
+		log.Printf("draftPost: generate draft: %v", err)
+		h.failDrafting(ctx, id, err.Error())
+		writeError(w, http.StatusBadGateway, "failed to generate draft")
+		return
+	}
+
+	version, err := h.store.NextDraftVersion(ctx, id)
+	if err != nil {
+		log.Printf("draftPost: next draft version: %v", err)
+		h.failDrafting(ctx, id, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to determine draft version")
+		return
+	}
+
+	imageAltsJSON, err := json.Marshal(draftOut.ImageAlts)
+	if err != nil {
+		log.Printf("draftPost: marshal image alts (non-fatal): %v", err)
+		imageAltsJSON = nil
+	}
+
+	draft, err := h.store.CreateDraft(ctx, id, version, draftOut.Content, &draftOut.MetaTitle, &draftOut.MetaDescription, imageAltsJSON)
+	if err != nil {
+		log.Printf("draftPost: create draft: %v", err)
+		h.failDrafting(ctx, id, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to save draft")
+		return
+	}
+
+	if err := h.store.UpdateStatus(ctx, id, pipeline.StatusDraftReady, nil); err != nil {
+		log.Printf("draftPost: update status draft_ready: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to update status")
+		return
+	}
+	if err := h.store.UpdateStatus(ctx, id, pipeline.StatusPendingReview, nil); err != nil {
+		log.Printf("draftPost: update status pending_review: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to update status")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, draft)
+}
+
+// failDrafting best-effort transitions a post to failed_drafting with errMsg.
+// Logs but doesn't surface a secondary error if the transition itself fails.
+func (h *Handler) failDrafting(ctx context.Context, postID, errMsg string) {
+	if err := h.store.UpdateStatus(ctx, postID, pipeline.StatusFailedDrafting, &errMsg); err != nil {
+		log.Printf("draftPost: failed to record failed_drafting: %v", err)
+	}
+}
+
+// searchQueryFor picks the Naver search query for a post: its explicit
+// keyword for keyword_input, or category(+subtype) for file_input, which
+// has no keyword field.
+func searchQueryFor(post store.Post) string {
+	if post.InputMethod == pipeline.InputMethodKeyword && post.InputKeyword != nil {
+		return *post.InputKeyword
+	}
+	query := post.Category
+	if post.Subtype != nil && *post.Subtype != "" {
+		query += " " + *post.Subtype
+	}
+	return query
 }
 
 func isValidContentType(c pipeline.ContentType) bool {
