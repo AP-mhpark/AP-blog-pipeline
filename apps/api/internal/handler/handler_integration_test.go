@@ -328,6 +328,47 @@ func TestHandlerIntegration(t *testing.T) {
 			t.Fatalf("drafts not ordered newest-first: %v", drafts)
 		}
 	})
+
+	t.Run("delete removes a post so get 404s afterward", func(t *testing.T) {
+		id := uploadResearchedPost(t, srv)
+
+		req, err := http.NewRequest(http.MethodDelete, srv.URL+"/posts/"+id, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("DELETE: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204", resp.StatusCode)
+		}
+
+		getResp, err := srv.Client().Get(srv.URL + "/posts/" + id)
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer getResp.Body.Close()
+		if getResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("got status %d, want 404 after delete", getResp.StatusCode)
+		}
+	})
+
+	t.Run("delete on missing post is 404", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodDelete, srv.URL+"/posts/00000000-0000-0000-0000-000000000000", nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("DELETE: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("got status %d, want 404", resp.StatusCode)
+		}
+	})
 }
 
 // draftToPendingReview uploads a fresh PDF and drafts it through to

@@ -6,6 +6,7 @@
 # Go
 apps/api/server
 apps/api/*.exe
+apps/api/uploads/
 
 # editor
 .DS_Store

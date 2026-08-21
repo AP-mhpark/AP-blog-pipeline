@@ -68,6 +68,7 @@ developers.naver.com "API 제휴 신청" 페이지 기준:
 |---|---|
 | `GET /posts` | 전체 목록 |
 | `GET /posts/{id}` | 단건 조회 (없으면 404) |
+| `DELETE /posts/{id}` | 삭제(204). 관련 데이터(업로드 파일 레코드, 조사 결과, 초안, 리뷰 기록, 상태 이력)는 FK `ON DELETE CASCADE`로 함께 삭제. 상태 제한 없음(1인용 내부 툴이라 테스트/실수 데이터를 언제든 지울 수 있어야 함) |
 | `POST /posts` | 키워드 입력 생성 (`content_type`, `category`, `subtype?`, `keyword` JSON). `status=researching`으로 생성만 하고 끝 — **네이버 데이터랩 조사 실행은 아직 없음**(스텁), 상태가 자동으로 진행되지 않는다 |
 | `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장 |
 | `POST /posts/{id}/draft` | 초안 생성/재생성. `researched`/`needs_revision` 상태에서만 가능(그 외 400). `naversearch`로 상위노출 제목/스니펫 조회(실패해도 무시하고 진행 — 보강 기능이라 단일 장애점 아님) → `llm.GenerateDraft`(Anthropic tool_use로 구조화된 출력) → 성공 시 `drafts`에 새 버전 저장 후 `draft_ready`→`pending_review`까지 자동 연쇄 전이. LLM 호출 실패는 치명적(`failed_drafting` + 에러 메시지, 502) |

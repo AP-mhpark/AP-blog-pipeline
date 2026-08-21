@@ -55,6 +55,7 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /posts", h.listPosts)
 	mux.HandleFunc("GET /posts/{id}", h.getPost)
+	mux.HandleFunc("DELETE /posts/{id}", h.deletePost)
 	mux.HandleFunc("POST /posts", h.createKeywordPost)
 	mux.HandleFunc("POST /posts/upload", h.uploadFilePost)
 	mux.HandleFunc("POST /posts/{id}/draft", h.draftPost)
@@ -87,6 +88,23 @@ func (h *Handler) getPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, post)
+}
+
+// deletePost removes a post and everything tied to it (upload record,
+// research data, drafts, review actions — cascaded via FK constraints).
+// No status restriction: this is a solo-user internal tool, and deleting a
+// mistaken/test entry at any stage is a reasonable thing to want.
+func (h *Handler) deletePost(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.DeletePost(r.Context(), r.PathValue("id")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "post not found")
+			return
+		}
+		log.Printf("deletePost: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete post")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type createKeywordPostRequest struct {
