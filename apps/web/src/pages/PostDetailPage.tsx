@@ -39,24 +39,26 @@ export default function PostDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["posts", id, "drafts"] });
   }
 
+  // onSettled (not onSuccess): a "failed" draft attempt still moves the post
+  // to failed_drafting server-side, so the screen needs to refresh either way
+  // — otherwise the status badge/error message are left stale after a
+  // reported failure.
   const draftMutation = useMutation({
     mutationFn: () => draftPost(id!),
-    onSuccess: invalidateAll,
+    onSettled: invalidateAll,
   });
   const approveMutation = useMutation({
     mutationFn: () => approvePost(id!),
-    onSuccess: invalidateAll,
+    onSettled: invalidateAll,
   });
   const rejectMutation = useMutation({
     mutationFn: () => rejectPost(id!, feedbackNote || undefined),
-    onSuccess: () => {
-      setFeedbackNote("");
-      invalidateAll();
-    },
+    onSuccess: () => setFeedbackNote(""),
+    onSettled: invalidateAll,
   });
   const archiveMutation = useMutation({
     mutationFn: () => archivePost(id!),
-    onSuccess: invalidateAll,
+    onSettled: invalidateAll,
   });
 
   const latestDraft = drafts?.[0];

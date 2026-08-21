@@ -68,6 +68,10 @@ export function getPost(id: string): Promise<Post> {
   return request<Post>(`/posts/${id}`);
 }
 
+export function deletePost(id: string): Promise<void> {
+  return request<void>(`/posts/${id}`, { method: "DELETE" });
+}
+
 export function listDrafts(postId: string): Promise<Draft[]> {
   return request<Draft[]>(`/posts/${postId}/drafts`);
 }

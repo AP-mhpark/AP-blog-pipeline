@@ -169,3 +169,18 @@ func (s *Store) UpdateStatus(ctx context.Context, id string, newStatus pipeline.
 	}
 	return nil
 }
+
+// DeletePost removes a post and everything tied to it (uploaded_files,
+// research_results, drafts, review_actions, status_transitions), which
+// cascade via the FK constraints in the schema. Returns ErrNotFound if no
+// such post exists.
+func (s *Store) DeletePost(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM posts WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete post: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

@@ -1,13 +1,25 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { listPosts } from "../api/client";
+import { deletePost, listPosts } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
 
 export default function PostListPage() {
+  const queryClient = useQueryClient();
   const { data: posts, isLoading, error } = useQuery({
     queryKey: ["posts"],
     queryFn: listPosts,
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: deletePost,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["posts"] }),
+  });
+
+  function handleDelete(postId: string, category: string) {
+    if (window.confirm(`"${category}" 글을 삭제할까요? 되돌릴 수 없습니다.`)) {
+      deleteMutation.mutate(postId);
+    }
+  }
 
   return (
     <div>
@@ -20,6 +32,9 @@ export default function PostListPage() {
 
       {isLoading && <p>불러오는 중...</p>}
       {error && <p style={{ color: "#b91c1c" }}>목록을 불러오지 못했습니다: {error.message}</p>}
+      {deleteMutation.isError && (
+        <p style={{ color: "#b91c1c" }}>삭제하지 못했습니다: {(deleteMutation.error as Error).message}</p>
+      )}
 
       {posts && posts.length === 0 && <p>아직 글이 없습니다.</p>}
 
@@ -31,6 +46,7 @@ export default function PostListPage() {
               <th style={{ padding: "0.5rem" }}>입력</th>
               <th style={{ padding: "0.5rem" }}>상태</th>
               <th style={{ padding: "0.5rem" }}>생성일</th>
+              <th style={{ padding: "0.5rem" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -51,6 +67,15 @@ export default function PostListPage() {
                 </td>
                 <td style={{ padding: "0.5rem", color: "#6b7280" }}>
                   {new Date(post.created_at).toLocaleString()}
+                </td>
+                <td style={{ padding: "0.5rem", textAlign: "right" }}>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(post.id, post.category)}
+                    disabled={deleteMutation.isPending && deleteMutation.variables === post.id}
+                  >
+                    삭제
+                  </button>
                 </td>
               </tr>
             ))}
