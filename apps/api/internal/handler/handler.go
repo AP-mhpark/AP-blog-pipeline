@@ -63,6 +63,10 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /posts/{id}/approve", h.approvePost)
 	mux.HandleFunc("POST /posts/{id}/reject", h.rejectPost)
 	mux.HandleFunc("POST /posts/{id}/archive", h.archivePost)
+	// Serves uploaded originals and extracted images (h.uploadDir/...). No
+	// auth on this API (single-user internal tool) and the source PDFs are
+	// public notices, so plain static serving is fine.
+	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(h.uploadDir))))
 	return mux
 }
 
@@ -198,7 +202,8 @@ func (h *Handler) uploadFilePost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to prepare upload storage")
 		return
 	}
-	storagePath := filepath.Join(h.uploadDir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), filepath.Base(header.Filename)))
+	namePrefix := fmt.Sprintf("%d", time.Now().UnixNano())
+	storagePath := filepath.Join(h.uploadDir, namePrefix+"-"+filepath.Base(header.Filename))
 
 	dst, err := os.Create(storagePath)
 	if err != nil {
@@ -255,7 +260,25 @@ func (h *Handler) uploadFilePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if parseErr == nil {
-		if _, err := h.store.CreateResearchResult(r.Context(), post.ID, "file_upload", nil, &extractedText); err != nil {
+		var rawData json.RawMessage
+		if fileType == "pdf" {
+			// Best-effort: most government notices' tables/figures are
+			// native PDF text+lines rather than embedded images, so an
+			// empty result here is normal, not an error. A failure here
+			// doesn't fail the upload — text extraction already succeeded.
+			images, imgErr := fileparser.ExtractPDFImages(storagePath, filepath.Join(h.uploadDir, "images"), namePrefix)
+			if imgErr != nil {
+				log.Printf("uploadFilePost: extract images (non-fatal): %v", imgErr)
+			} else if len(images) > 0 {
+				if b, err := json.Marshal(researchRawData{Images: images}); err == nil {
+					rawData = b
+				} else {
+					log.Printf("uploadFilePost: marshal image list (non-fatal): %v", err)
+				}
+			}
+		}
+
+		if _, err := h.store.CreateResearchResult(r.Context(), post.ID, "file_upload", rawData, &extractedText); err != nil {
 			log.Printf("uploadFilePost: create research result: %v", err)
 			writeError(w, http.StatusInternalServerError, "failed to record research result")
 			return
@@ -263,6 +286,12 @@ func (h *Handler) uploadFilePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, post)
+}
+
+// researchRawData is the shape stored in research_results.raw_data for
+// file_upload sources.
+type researchRawData struct {
+	Images []string `json:"images,omitempty"`
 }
 
 // draftPost generates (or regenerates, on the revision loop) a draft for a
@@ -309,6 +338,15 @@ func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
 	if research.ExtractedText != nil {
 		sourceText = *research.ExtractedText
 	}
+	var extractedImages []string
+	if len(research.RawData) > 0 {
+		var raw researchRawData
+		if err := json.Unmarshal(research.RawData, &raw); err != nil {
+			log.Printf("draftPost: parse research raw_data (non-fatal): %v", err)
+		} else {
+			extractedImages = raw.Images
+		}
+	}
 
 	var titles, snippets []string
 	if results, err := h.searcher.SearchBlogs(ctx, searchQueryFor(post), 5); err != nil {
@@ -331,6 +369,7 @@ func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
 		SourceText:        sourceText,
 		ReferenceTitles:   titles,
 		ReferenceSnippets: snippets,
+		ExtractedImages:   extractedImages,
 	})
 	if err != nil {
 		log.Printf("draftPost: generate draft: %v", err)
@@ -347,13 +386,13 @@ func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imageAltsJSON, err := json.Marshal(draftOut.ImageAlts)
+	usedImagesJSON, err := json.Marshal(draftOut.UsedImages)
 	if err != nil {
-		log.Printf("draftPost: marshal image alts (non-fatal): %v", err)
-		imageAltsJSON = nil
+		log.Printf("draftPost: marshal used images (non-fatal): %v", err)
+		usedImagesJSON = nil
 	}
 
-	draft, err := h.store.CreateDraft(ctx, id, version, draftOut.Content, &draftOut.MetaTitle, &draftOut.MetaDescription, imageAltsJSON)
+	draft, err := h.store.CreateDraft(ctx, id, version, draftOut.Content, &draftOut.MetaTitle, &draftOut.MetaDescription, usedImagesJSON)
 	if err != nil {
 		log.Printf("draftPost: create draft: %v", err)
 		h.failDrafting(ctx, id, err.Error())

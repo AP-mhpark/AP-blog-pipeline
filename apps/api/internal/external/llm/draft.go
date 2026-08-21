@@ -20,6 +20,7 @@ type DraftInput struct {
 	SourceText        string   // extracted PDF/Excel text (from fileparser)
 	ReferenceTitles   []string // top-ranking blog titles for the target keyword
 	ReferenceSnippets []string // matching descriptions/snippets
+	ExtractedImages   []string // filenames of images embedded in the source PDF (fileparser.ExtractPDFImages)
 }
 
 // DraftOutput is the structured result of a drafting call.
@@ -27,7 +28,7 @@ type DraftOutput struct {
 	Content         string   `json:"content"`
 	MetaTitle       string   `json:"meta_title"`
 	MetaDescription string   `json:"meta_description"`
-	ImageAlts       []string `json:"image_alts"`
+	UsedImages      []string `json:"used_images"` // subset of DraftInput.ExtractedImages actually referenced in Content
 }
 
 // GenerateDraft asks Claude to produce a blog draft from in, using
@@ -41,7 +42,7 @@ func (c *Client) GenerateDraft(ctx context.Context, in DraftInput) (DraftOutput,
 			Properties: map[string]any{
 				"content": map[string]any{
 					"type":        "string",
-					"description": "완성된 블로그 본문(마크다운). 자격 요건·일정·신청 방법 등 필수 정보 요약과, 누가 특히 유리한지에 대한 서술형 분석을 포함한다.",
+					"description": "완성된 블로그 본문(마크다운). 자격 요건·일정·신청 방법 등 필수 정보 요약과, 누가 특히 유리한지에 대한 서술형 분석을 포함한다. 표 형태 정보는 마크다운 표 문법으로 작성하고, 제공된 이미지 중 본문과 관련 있는 것은 본문 안에 ![대체텍스트](파일명) 형식으로 삽입한다.",
 				},
 				"meta_title": map[string]any{
 					"type":        "string",
@@ -51,10 +52,10 @@ func (c *Client) GenerateDraft(ctx context.Context, in DraftInput) (DraftOutput,
 					"type":        "string",
 					"description": "SEO용 설명, 100자 이내",
 				},
-				"image_alts": map[string]any{
+				"used_images": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "본문에 들어갈 만한 이미지 2~4개에 대한 대체텍스트 제안",
+					"description": "content 안에서 실제로 ![]() 형식으로 참조한 이미지 파일명 목록. 제공된 이미지 목록에 없는 파일명은 절대 포함하지 않는다. 관련 이미지가 없으면 빈 배열.",
 				},
 			},
 			Required: []string{"content", "meta_title", "meta_description"},
@@ -101,6 +102,8 @@ const draftSystemPrompt = `당신은 한국어 생활정보 블로그 글을 작
 - 독자(신청/조사를 준비하는 사람)가 실제로 알아야 할 자격 요건, 신청 일정, 신청 방법 등 필수 정보를 빠짐없이 정리합니다.
 - "누가 특히 유리한지"를 원문 근거를 들어 서술형으로 분석합니다. 개인화된 계산기가 아니라 글 안의 설명이라는 점을 유지합니다.
 - 함께 제공되는 "참고 상위노출 제목/스니펫"은 표절하지 말고, 문체·어조·독자가 궁금해하는 포인트를 파악하는 용도로만 참고합니다.
+- 소득기준표·일정표처럼 표로 정리하는 게 나은 정보는 마크다운 표 문법으로 작성합니다. 표를 이미지로 대체하지 않습니다.
+- 이미지는 새로 만들어내지 않습니다. 함께 제공되는 "원문에서 추출된 이미지 파일명" 목록 중 본문과 실제로 관련 있는 것만, 목록에 있는 파일명 그대로 ![대체텍스트](파일명) 형식으로 본문에 삽입합니다. 목록에 없는 파일명을 지어내지 않고, 관련 있는 이미지가 없으면 삽입하지 않습니다.
 - 결과는 반드시 emit_draft 도구 호출로 제출합니다.`
 
 func buildDraftUserPrompt(in DraftInput) string {
@@ -124,6 +127,14 @@ func buildDraftUserPrompt(in DraftInput) string {
 				fmt.Fprintf(&b, " — %s", in.ReferenceSnippets[i])
 			}
 			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(in.ExtractedImages) > 0 {
+		b.WriteString("=== 원문에서 추출된 이미지 파일명 (관련 있는 것만 선택해서 사용) ===\n")
+		for _, name := range in.ExtractedImages {
+			b.WriteString(name + "\n")
 		}
 	}
 
