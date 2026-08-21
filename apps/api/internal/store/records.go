@@ -124,6 +124,54 @@ func (s *Store) NextDraftVersion(ctx context.Context, postID string) (int, error
 	return next, nil
 }
 
+// GetLatestDraft fetches a post's highest-version draft. Returns
+// ErrNotFound if the post has no drafts yet.
+func (s *Store) GetLatestDraft(ctx context.Context, postID string) (Draft, error) {
+	var d Draft
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, post_id::text, version, content, meta_title, meta_description, image_alts, created_at
+		FROM drafts WHERE post_id = $1
+		ORDER BY version DESC LIMIT 1
+	`, postID).Scan(
+		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Draft{}, ErrNotFound
+		}
+		return Draft{}, fmt.Errorf("get latest draft: %w", err)
+	}
+	return d, nil
+}
+
+// ListDrafts returns all of a post's drafts, most recent version first.
+func (s *Store) ListDrafts(ctx context.Context, postID string) ([]Draft, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, post_id::text, version, content, meta_title, meta_description, image_alts, created_at
+		FROM drafts WHERE post_id = $1
+		ORDER BY version DESC
+	`, postID)
+	if err != nil {
+		return nil, fmt.Errorf("list drafts: %w", err)
+	}
+	defer rows.Close()
+
+	var drafts []Draft
+	for rows.Next() {
+		var d Draft
+		if err := rows.Scan(
+			&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan draft: %w", err)
+		}
+		drafts = append(drafts, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list drafts: %w", err)
+	}
+	return drafts, nil
+}
+
 // ReviewAction mirrors a row in the review_actions table.
 type ReviewAction struct {
 	ID           string    `json:"id"`

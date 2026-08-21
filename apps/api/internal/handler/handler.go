@@ -58,6 +58,10 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /posts", h.createKeywordPost)
 	mux.HandleFunc("POST /posts/upload", h.uploadFilePost)
 	mux.HandleFunc("POST /posts/{id}/draft", h.draftPost)
+	mux.HandleFunc("GET /posts/{id}/drafts", h.listDrafts)
+	mux.HandleFunc("POST /posts/{id}/approve", h.approvePost)
+	mux.HandleFunc("POST /posts/{id}/reject", h.rejectPost)
+	mux.HandleFunc("POST /posts/{id}/archive", h.archivePost)
 	return mux
 }
 
@@ -373,6 +377,141 @@ func searchQueryFor(post store.Post) string {
 		query += " " + *post.Subtype
 	}
 	return query
+}
+
+func (h *Handler) listDrafts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.store.GetPost(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "post not found")
+			return
+		}
+		log.Printf("listDrafts: get post: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to get post")
+		return
+	}
+
+	drafts, err := h.store.ListDrafts(r.Context(), id)
+	if err != nil {
+		log.Printf("listDrafts: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to list drafts")
+		return
+	}
+	writeJSON(w, http.StatusOK, drafts)
+}
+
+// approvePost moves a post from pending_review to approved and records the
+// decision in review_actions.
+func (h *Handler) approvePost(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	draft, ok := h.prepareReviewAction(w, r, id)
+	if !ok {
+		return
+	}
+
+	if err := h.store.UpdateStatus(r.Context(), id, pipeline.StatusApproved, nil); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot approve: %v", err))
+		return
+	}
+	if _, err := h.store.CreateReviewAction(r.Context(), id, draft.ID, "approve", nil); err != nil {
+		log.Printf("approvePost: create review action: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to record review action")
+		return
+	}
+
+	h.respondWithPost(w, r, id)
+}
+
+type rejectRequest struct {
+	FeedbackNote *string `json:"feedback_note"`
+}
+
+// rejectPost moves a post from pending_review to needs_revision and records
+// the decision (with optional feedback) in review_actions. Regenerating the
+// draft afterward goes through POST /posts/{id}/draft, which already
+// supports needs_revision -> drafting.
+func (h *Handler) rejectPost(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req rejectRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+
+	draft, ok := h.prepareReviewAction(w, r, id)
+	if !ok {
+		return
+	}
+
+	if err := h.store.UpdateStatus(r.Context(), id, pipeline.StatusNeedsRevision, nil); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot reject: %v", err))
+		return
+	}
+	if _, err := h.store.CreateReviewAction(r.Context(), id, draft.ID, "reject", req.FeedbackNote); err != nil {
+		log.Printf("rejectPost: create review action: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to record review action")
+		return
+	}
+
+	h.respondWithPost(w, r, id)
+}
+
+// archivePost moves a post from approved to archived: the user's manual
+// mark that they've copied the approved content into the Naver editor.
+// No review_actions row — this isn't a review decision.
+func (h *Handler) archivePost(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.store.UpdateStatus(r.Context(), id, pipeline.StatusArchived, nil); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "post not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot archive: %v", err))
+		return
+	}
+	h.respondWithPost(w, r, id)
+}
+
+// prepareReviewAction fetches the post and its latest draft (needed for
+// review_actions.draft_id), writing an error response and returning
+// ok=false if either lookup fails.
+func (h *Handler) prepareReviewAction(w http.ResponseWriter, r *http.Request, id string) (store.Draft, bool) {
+	if _, err := h.store.GetPost(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "post not found")
+			return store.Draft{}, false
+		}
+		log.Printf("prepareReviewAction: get post: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to get post")
+		return store.Draft{}, false
+	}
+
+	draft, err := h.store.GetLatestDraft(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusUnprocessableEntity, "post has no draft to review")
+			return store.Draft{}, false
+		}
+		log.Printf("prepareReviewAction: get latest draft: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to get latest draft")
+		return store.Draft{}, false
+	}
+	return draft, true
+}
+
+// respondWithPost re-fetches and writes the post as JSON — used after a
+// status-changing action to return the post's current state.
+func (h *Handler) respondWithPost(w http.ResponseWriter, r *http.Request, id string) {
+	post, err := h.store.GetPost(r.Context(), id)
+	if err != nil {
+		log.Printf("respondWithPost: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to load updated post")
+		return
+	}
+	writeJSON(w, http.StatusOK, post)
 }
 
 func isValidContentType(c pipeline.ContentType) bool {

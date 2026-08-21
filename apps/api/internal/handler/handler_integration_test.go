@@ -230,6 +230,123 @@ func TestHandlerIntegration(t *testing.T) {
 			t.Fatalf("got content %v, want draft despite search failure", draft["content"])
 		}
 	})
+
+	t.Run("approve moves pending_review to approved", func(t *testing.T) {
+		id := draftToPendingReview(t, srv, fakeGenerator, fakeBlogSearcher)
+
+		var post map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/approve", nil, http.StatusOK, &post)
+		if post["status"] != "approved" {
+			t.Fatalf("got status %v, want approved", post["status"])
+		}
+	})
+
+	t.Run("reject moves to needs_revision, and redraft produces version 2", func(t *testing.T) {
+		id := draftToPendingReview(t, srv, fakeGenerator, fakeBlogSearcher)
+
+		body := strings.NewReader(`{"feedback_note":"제목 다시"}`)
+		var post map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/reject", body, http.StatusOK, &post)
+		if post["status"] != "needs_revision" {
+			t.Fatalf("got status %v, want needs_revision", post["status"])
+		}
+
+		fakeGenerator.output = llm.DraftOutput{
+			Content:         "본문 초안 v2",
+			MetaTitle:       "테스트 제목 v2",
+			MetaDescription: "테스트 설명 v2",
+		}
+		var draft map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/draft", nil, http.StatusCreated, &draft)
+		if draft["version"] != float64(2) {
+			t.Fatalf("got version %v, want 2", draft["version"])
+		}
+
+		doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/posts/"+id, nil, http.StatusOK, &post)
+		if post["status"] != "pending_review" {
+			t.Fatalf("got status %v, want pending_review after redraft", post["status"])
+		}
+	})
+
+	t.Run("archive moves approved to archived", func(t *testing.T) {
+		id := draftToPendingReview(t, srv, fakeGenerator, fakeBlogSearcher)
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/approve", nil, http.StatusOK, nil)
+
+		var post map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/archive", nil, http.StatusOK, &post)
+		if post["status"] != "archived" {
+			t.Fatalf("got status %v, want archived", post["status"])
+		}
+	})
+
+	t.Run("approve without a draft is rejected", func(t *testing.T) {
+		id := uploadResearchedPost(t, srv)
+
+		resp, err := srv.Client().Post(srv.URL+"/posts/"+id+"/approve", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("got status %d, want 422 (no draft to review)", resp.StatusCode)
+		}
+	})
+
+	t.Run("approving an already-approved post is rejected", func(t *testing.T) {
+		id := draftToPendingReview(t, srv, fakeGenerator, fakeBlogSearcher)
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/approve", nil, http.StatusOK, nil)
+
+		// Has a draft now, so this exercises pipeline.Transition rejecting
+		// approved -> approved rather than the "no draft" 422 case above.
+		resp, err := srv.Client().Post(srv.URL+"/posts/"+id+"/approve", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("got status %d, want 400", resp.StatusCode)
+		}
+	})
+
+	t.Run("list drafts returns versions newest first", func(t *testing.T) {
+		id := draftToPendingReview(t, srv, fakeGenerator, fakeBlogSearcher)
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/reject", nil, http.StatusOK, nil)
+
+		fakeGenerator.output = llm.DraftOutput{
+			Content:         "v2",
+			MetaTitle:       "t2",
+			MetaDescription: "d2",
+		}
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/draft", nil, http.StatusCreated, nil)
+
+		var drafts []map[string]any
+		doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/posts/"+id+"/drafts", nil, http.StatusOK, &drafts)
+		if len(drafts) != 2 {
+			t.Fatalf("got %d drafts, want 2", len(drafts))
+		}
+		if drafts[0]["version"] != float64(2) || drafts[1]["version"] != float64(1) {
+			t.Fatalf("drafts not ordered newest-first: %v", drafts)
+		}
+	})
+}
+
+// draftToPendingReview uploads a fresh PDF and drafts it through to
+// pending_review using the given fakes, returning the post ID.
+func draftToPendingReview(t *testing.T, srv *httptest.Server, gen *fakeLLM, searcher *fakeSearcher) string {
+	t.Helper()
+	id := uploadResearchedPost(t, srv)
+
+	gen.err = nil
+	gen.output = llm.DraftOutput{
+		Content:         "본문 초안",
+		MetaTitle:       "테스트 제목",
+		MetaDescription: "테스트 설명",
+	}
+	searcher.err = nil
+	searcher.results = nil
+
+	doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+id+"/draft", nil, http.StatusCreated, nil)
+	return id
 }
 
 // uploadResearchedPost uploads a fresh valid PDF and returns the resulting

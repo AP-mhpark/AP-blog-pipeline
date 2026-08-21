@@ -57,8 +57,12 @@ PostgreSQL. 스키마 전문은 `apps/api/migrations/0001_init_schema.up.sql`에
 | `POST /posts` | 키워드 입력 생성 (`content_type`, `category`, `subtype?`, `keyword` JSON). `status=researching`으로 생성만 하고 끝 — **네이버 데이터랩 조사 실행은 아직 없음**(스텁), 상태가 자동으로 진행되지 않는다 |
 | `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장 |
 | `POST /posts/{id}/draft` | 초안 생성/재생성. `researched`/`needs_revision` 상태에서만 가능(그 외 400). `naversearch`로 상위노출 제목/스니펫 조회(실패해도 무시하고 진행 — 보강 기능이라 단일 장애점 아님) → `llm.GenerateDraft`(Anthropic tool_use로 구조화된 출력) → 성공 시 `drafts`에 새 버전 저장 후 `draft_ready`→`pending_review`까지 자동 연쇄 전이. LLM 호출 실패는 치명적(`failed_drafting` + 에러 메시지, 502) |
+| `GET /posts/{id}/drafts` | 해당 글의 모든 초안 버전(최신순) |
+| `POST /posts/{id}/approve` | `pending_review`→`approved`. 초안이 없으면 422, 상태가 안 맞으면 400. `review_actions`에 `approve` 기록 |
+| `POST /posts/{id}/reject` | `pending_review`→`needs_revision` (JSON body `{"feedback_note"?: string}`). `review_actions`에 `reject`+피드백 기록. 재생성은 기존 `POST /posts/{id}/draft` 재사용(`needs_revision`→`drafting` 지원) |
+| `POST /posts/{id}/archive` | `approved`→`archived` — 사용자가 네이버 에디터에 수동 업로드 완료했다는 표시. `review_actions` 관여 없음 |
 
-`pending_review` 도달 후 승인/반려/보관 엔드포인트는 아직 없다 — 사람이 검토해서 액션을 트리거하는 UI/API가 다음 단계.
+이제 파이프라인 상태 머신 전체(`researching`~`archived`, 반려 루프 포함)가 API로 끝까지 연결됐다.
 
 ## 테스트
 
