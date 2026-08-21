@@ -18,6 +18,7 @@ apps/api
     /store                # pgx 기반 DB 접근(repository)
     /external
       /naverdatalab      # 네이버 데이터랩 API 연동
+      /naversearch       # 네이버 검색 API 연동 (상위노출 제목/스니펫 조회)
       /llm               # LLM API 연동
       /fileparser        # PDF/엑셀 파서
   /migrations            # golang-migrate SQL 마이그레이션
@@ -38,11 +39,12 @@ PostgreSQL. 스키마 전문은 `apps/api/migrations/0001_init_schema.up.sql`에
 | 용도 | 라이브러리 | 선정 이유 |
 |---|---|---|
 | 트렌드/키워드 조사 | 네이버 데이터랩 API | 1차 채택. 구글 트렌드는 공식 API 없음 — 필요 시 `pytrends` 등 비공식 라이브러리 검토(안정성 낮음) |
+| 상위노출 제목/스니펫 조회 | 네이버 검색 API(`openapi.naver.com/v1/search/blog.json`) | 드래프팅에서 SEO 제목·어조를 참고하기 위해 상위노출 블로그의 제목+스니펫을 조회. 본문 전체는 가져오지 않음(네이버 블로그 iframe 렌더링이라 스크래핑이 까다롭고, 타 콘텐츠 대량 수집이라 스니펫 대비 리스크가 큼). 데이터랩과 같은 네이버 앱 자격증명(`NAVER_CLIENT_ID/SECRET`) 공유 |
 | 초안/분석 생성 | `github.com/anthropics/anthropic-sdk-go` (Anthropic Claude API) | 공식 SDK, 활발히 관리됨. 200k 토큰 컨텍스트라 PDF/엑셀 전문을 통째로 넣기 유리하고, tool use로 구조화된 출력(meta_title/description/image_alts)을 안정적으로 받을 수 있음 |
 | PDF 텍스트/표 추출 | `github.com/razvandimescu/gopdf` | MIT, 순수 Go, 외부 의존성 0, 표 추출(rows/columns) 지원 — 청약 공고의 소득기준표·공급일정표 추출에 적합. `unidoc/unipdf`는 기능은 강력하지만 AGPL/상용 이중 라이선스라 배제 |
 | 엑셀 파싱 | `github.com/xuri/excelize/v2` | 사실상 Go 생태계 표준, 활발히 관리됨 |
 
-각각 `internal/external/{naverdatalab,llm,fileparser}`에서 래핑한다.
+각각 `internal/external/{naverdatalab,naversearch,llm,fileparser}`에서 래핑한다.
 
 ## REST API
 
@@ -76,4 +78,4 @@ migrate -path apps/api/migrations -database "$DATABASE_URL" up
 go run ./cmd/server
 ```
 
-`.env.example`을 복사해 `.env`를 만들고 값을 채운다(`DATABASE_URL`, `UPLOAD_DIR`, `NAVER_DATALAB_CLIENT_ID/SECRET`, `ANTHROPIC_API_KEY`).
+`.env.example`을 복사해 `.env`를 만들고 값을 채운다(`DATABASE_URL`, `UPLOAD_DIR`, `NAVER_CLIENT_ID/SECRET`, `ANTHROPIC_API_KEY`).
