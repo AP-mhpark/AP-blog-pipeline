@@ -41,19 +41,16 @@
 
 ```
 /repo
+  CLAUDE.md              # 리포 루트에 유지 — Claude Code 자동 로딩 대상이라 /docs로 옮기지 않음
+  docker-compose.yml     # 현재는 db(postgres)만. api/web은 배포처 확정 전까지 go run/npm run dev로 로컬 실행
   /apps
-    /api        # Go — 파이프라인 로직, 외부 API 연동, DB 접근
-    /web        # React (Vite) — 검토/승인 UI. SSR 불필요, Next.js 아님
-  /docs
-    CLAUDE.md
-  docker-compose.yml   # api + web + postgres 로컬 실행
+    /api                 # Go — 파이프라인 로직, 외부 API 연동, DB 접근. 구현 세부는 apps/api/CLAUDE.md
+    /web                 # React (Vite) — 검토/승인 UI. 구현 세부는 apps/web/CLAUDE.md
 ```
 
-- **Go API 서버**: REST API. 파이프라인 각 단계(조사/생성/메타데이터)를 순차 실행하고 상태를 기록. 외부 API 호출(트렌드/LLM/이미지)은 goroutine으로 병렬화 가능한 부분만 병렬화.
-- **React 프론트**: 순수 클라이언트. 목록 화면(진행 중인 포스트 상태 확인) + 상세 화면(초안 보기/수정/승인·반려 버튼). SSR/SEO 불필요.
-- **DB/스키마**: PostgreSQL 사용 확정. 구체적 스키마는 아키텍처 설계 단계에서 결정 — 이 문서에서는 확정하지 않는다.
-
-> [자리표시] Go 모듈 구조(예: `internal/pipeline`, `internal/handler` 등 패키지 분리 규칙)는 실제 개발 시작 시 확정해서 이 섹션에 채울 것.
+- **Go API 서버**: REST API. 파이프라인 각 단계(조사/생성/메타데이터)를 순차 실행하고 상태를 기록. 외부 API 호출(트렌드/LLM/이미지)은 goroutine으로 병렬화 가능한 부분만 병렬화. 모듈/패키지 구조, DB 스키마 세부는 `apps/api/CLAUDE.md` 참고.
+- **React 프론트**: 순수 클라이언트. 목록 화면(진행 중인 포스트 상태 확인) + 상세 화면(초안 보기/수정/승인·반려 버튼). SSR/SEO 불필요, Next.js 아님. 디렉토리 구조는 `apps/web/CLAUDE.md` 참고.
+- **DB**: PostgreSQL 사용 확정. 스키마 세부는 `apps/api/CLAUDE.md` 참고.
 
 ## 5. 파이프라인 상태 머신 (도메인 규칙 — 스키마와 무관하게 유지)
 
@@ -73,7 +70,7 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 ```
 
 - **입력 방식 두 가지**: ① 키워드 입력 → `researching` 단계에서 트렌드/키워드 조사 자동 수행. ② PDF/엑셀 파일 업로드 → 이미 조사 자료가 주어진 상태이므로 `researching` 단계를 건너뛰고 바로 `researched`로 진입. 이후 흐름(drafting~archived)은 입력 방식과 무관하게 동일.
-- 파일 업로드는 PDF 텍스트 추출 + 엑셀 파싱이 필요 — Go 쪽에 파서 라이브러리 추가 필요(추후 확정).
+- 파일 업로드는 PDF 텍스트 추출 + 엑셀 파싱이 필요 — Go 쪽 파서 라이브러리 선정 등 구현 세부는 `apps/api/CLAUDE.md` 참고.
 
 - 상태 전이는 Go API에서만 발생시킨다. 프론트는 상태를 읽고 액션(승인/반려)만 트리거한다.
 - 각 단계 실패 시 `failed_<step>` 상태로 기록하고 에러 메시지를 남긴다. 재시도는 수동 트리거.
@@ -87,9 +84,9 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 |---|---|---|
 | 백엔드 | Go | 상태 머신·외부 API 병렬 호출에 적합, 기존 숙련도 활용 |
 | 프론트 | React (Vite) | Next.js 불필요 — 내부 툴이라 SSR 이점 없음 |
-| DB | PostgreSQL | 스키마는 아키텍처 설계 단계에서 확정 |
-| 트렌드 조사 | 네이버 데이터랩 API (1차) | 구글 트렌드는 공식 API 없음 — 필요 시 `pytrends` 등 비공식 라이브러리, 안정성 낮음 |
-| 초안 생성 | LLM API | > [자리표시] 어떤 제공사 API 쓸지 확정 필요 |
+| DB | PostgreSQL | 스키마 상세는 `apps/api/CLAUDE.md` |
+| 트렌드 조사 | 네이버 데이터랩 API (1차) | 구글 트렌드는 공식 API 없음. 상세는 `apps/api/CLAUDE.md` |
+| 초안 생성 | Anthropic Claude API | 공식 Go SDK 사용. 상세는 `apps/api/CLAUDE.md` |
 | 배포 | > [자리표시] | Go: Fly.io/Railway 등, React: Vercel/Netlify 등 후보 |
 
 ## 7. 개발 규칙
@@ -111,17 +108,24 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 
 ### 코딩 스타일
 - Go: 표준 `gofmt`/`golint` 규칙을 따르고, 에러는 반드시 반환값으로 처리하며 panic으로 흐름을 제어하지 않는다.
-- React: 컴포넌트는 PascalCase, 파일명은 kebab-case를 기본으로 한다.
+- React 관련 세부 컨벤션은 `apps/web/CLAUDE.md` 참고.
 - 주석은 "왜"가 비직관적일 때만 남기고, 코드가 스스로 설명 가능한 부분(자명한 "무엇")에는 달지 않는다.
 
 ### Git 컨벤션
 - 커밋 메시지는 Conventional Commits 형식을 따른다 (`feat:`, `fix:`, `refactor:`, `docs:` 등).
 - `main` 브랜치에 직접 커밋하지 않고 feature 브랜치에서 작업 후 병합한다.
+- 브랜치명은 커밋 타입 규칙과 맞춰 `<type>/<짧은-설명>` 형식을 쓴다 (예: `feat/pipeline-state-machine`, `fix/draft-retry`, `docs/architecture`).
+- 브랜치 하나는 하나의 논리적 작업 단위(리뷰 가능한 크기)로 유지한다. 작업 범위가 커지면 더 작은 단위로 쪼갠다.
 - 파이프라인 상태 머신, 외부 API 연동 등 핵심 로직 변경은 병합 전 반드시 리뷰를 거친다.
+- **git commit, push는 반드시 사용자 승인 후에 실행한다.** 커밋/푸시 전 어떤 변경을 커밋하는지, 어디로 푸시하는지 먼저 알리고 승인받는다. 한 번의 승인이 이후 커밋/푸시를 모두 허용하는 것은 아니며, 매 커밋/푸시마다 다시 확인받는다.
+- 커밋/푸시 승인을 요청하기 전에, 이번 작업에서 무엇을 했는지와 테스트 결과(통과 여부)를 대화창에 요약해서 먼저 보고한다.
+- 사용법/실행 방법/설정값이 바뀌는 변경(새 패키지 추가, 새 env 변수, 새 API 엔드포인트 등)에는 해당 앱의 CLAUDE.md를 함께 업데이트한다.
 
 ### 테스트 규칙
 - 파이프라인 상태 전이(특히 반려 루프 `pending_review → needs_revision → drafting`) 로직은 테스트 코드 작성을 필수로 한다.
 - 외부 API(트렌드, LLM, 파일 파싱) 연동은 실패/타임아웃 시나리오를 반드시 테스트한다.
+- 순수 스캐폴딩/설정 변경 등 실제 로직이 없는 작업은 테스트 예외로 한다.
+- 관련 로직이 포함된 브랜치는 병합 전 로컬에서 테스트를 실행해 통과를 확인한다 (api: `go test ./...`, web: 테스트 프레임워크 도입 후 해당 명령).
 
 ### 로깅 / 모니터링
 - 각 파이프라인 단계의 시작/완료/실패는 감사 추적이 가능하도록 로그를 남긴다 (`failed_<step>` 상태와 에러 메시지 포함).
@@ -137,4 +141,18 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 
 ## 8. 로컬 개발
 
-> [자리표시] `docker-compose.yml` 작성 후 실행 명령어 채울 것 (예: `docker-compose up`, `go run ./apps/api`, `npm run dev` 등)
+```bash
+# 1. DB 기동
+docker compose up -d db
+
+# 2. 마이그레이션 적용 (golang-migrate CLI 필요: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest)
+migrate -path apps/api/migrations -database "$DATABASE_URL" up
+
+# 3. API 서버 실행
+cd apps/api && go run ./cmd/server
+
+# 4. 프론트 개발 서버 실행
+cd apps/web && npm install && npm run dev
+```
+
+각 앱의 `.env.example`을 복사해 `.env`를 만들고 값을 채운다 (`apps/api/.env.example`, `apps/web/.env.example`).
