@@ -1,0 +1,114 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// UploadedFile mirrors a row in the uploaded_files table.
+type UploadedFile struct {
+	ID               string
+	PostID           string
+	OriginalFilename string
+	FileType         string // "pdf" | "xlsx"
+	StoragePath      string
+	UploadedAt       time.Time
+}
+
+// CreateUploadedFile records an uploaded PDF/Excel file for a post.
+func (s *Store) CreateUploadedFile(ctx context.Context, postID, originalFilename, fileType, storagePath string) (UploadedFile, error) {
+	var f UploadedFile
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO uploaded_files (post_id, original_filename, file_type, storage_path)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id::text, post_id::text, original_filename, file_type, storage_path, uploaded_at
+	`, postID, originalFilename, fileType, storagePath).Scan(
+		&f.ID, &f.PostID, &f.OriginalFilename, &f.FileType, &f.StoragePath, &f.UploadedAt,
+	)
+	if err != nil {
+		return UploadedFile{}, fmt.Errorf("create uploaded file: %w", err)
+	}
+	return f, nil
+}
+
+// ResearchResult mirrors a row in the research_results table.
+type ResearchResult struct {
+	ID            string
+	PostID        string
+	Source        string // "naver_datalab" | "file_upload"
+	RawData       json.RawMessage
+	ExtractedText *string
+	CreatedAt     time.Time
+}
+
+// CreateResearchResult records trend-research or extracted-file data for a post.
+func (s *Store) CreateResearchResult(ctx context.Context, postID, source string, rawData json.RawMessage, extractedText *string) (ResearchResult, error) {
+	var r ResearchResult
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO research_results (post_id, source, raw_data, extracted_text)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id::text, post_id::text, source, raw_data, extracted_text, created_at
+	`, postID, source, rawData, extractedText).Scan(
+		&r.ID, &r.PostID, &r.Source, &r.RawData, &r.ExtractedText, &r.CreatedAt,
+	)
+	if err != nil {
+		return ResearchResult{}, fmt.Errorf("create research result: %w", err)
+	}
+	return r, nil
+}
+
+// Draft mirrors a row in the drafts table.
+type Draft struct {
+	ID              string
+	PostID          string
+	Version         int
+	Content         string
+	MetaTitle       *string
+	MetaDescription *string
+	ImageAlts       json.RawMessage
+	CreatedAt       time.Time
+}
+
+// CreateDraft records a generated draft (with its SEO metadata) for a post.
+func (s *Store) CreateDraft(ctx context.Context, postID string, version int, content string, metaTitle, metaDescription *string, imageAlts json.RawMessage) (Draft, error) {
+	var d Draft
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO drafts (post_id, version, content, meta_title, meta_description, image_alts)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id::text, post_id::text, version, content, meta_title, meta_description, image_alts, created_at
+	`, postID, version, content, metaTitle, metaDescription, imageAlts).Scan(
+		&d.ID, &d.PostID, &d.Version, &d.Content, &d.MetaTitle, &d.MetaDescription, &d.ImageAlts, &d.CreatedAt,
+	)
+	if err != nil {
+		return Draft{}, fmt.Errorf("create draft: %w", err)
+	}
+	return d, nil
+}
+
+// ReviewAction mirrors a row in the review_actions table.
+type ReviewAction struct {
+	ID           string
+	PostID       string
+	DraftID      string
+	Action       string // "approve" | "reject"
+	FeedbackNote *string
+	CreatedAt    time.Time
+}
+
+// CreateReviewAction records an approve/reject decision on a draft.
+func (s *Store) CreateReviewAction(ctx context.Context, postID, draftID, action string, feedbackNote *string) (ReviewAction, error) {
+	var r ReviewAction
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO review_actions (post_id, draft_id, action, feedback_note)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id::text, post_id::text, draft_id::text, action, feedback_note, created_at
+	`, postID, draftID, action, feedbackNote).Scan(
+		&r.ID, &r.PostID, &r.DraftID, &r.Action, &r.FeedbackNote, &r.CreatedAt,
+	)
+	if err != nil {
+		return ReviewAction{}, fmt.Errorf("create review action: %w", err)
+	}
+	return r, nil
+}
