@@ -1,10 +1,9 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { extractedImageUrl, type Draft } from "../api/client";
 
-// Display-only. No markdown rendering (yet) — content is shown as
-// pre-formatted text rather than pulling in a markdown dependency for this,
-// so ![alt](filename) references inside content show as literal text.
-// used_images is rendered separately as an actual image gallery below so
-// the images are at least visible somewhere.
+// react-markdown renders no raw HTML by default (no rehype-raw plugin), so
+// this is safe even though `content` comes straight from the LLM.
 export default function DraftView({ draft }: { draft: Draft }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "1rem" }}>
@@ -22,32 +21,21 @@ export default function DraftView({ draft }: { draft: Draft }) {
           <strong>SEO 설명:</strong> {draft.meta_description}
         </p>
       )}
-      {draft.used_images && draft.used_images.length > 0 && (
-        <div>
-          <strong>원문에서 추출해 사용한 이미지:</strong>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
-            {draft.used_images.map((filename) => (
-              <img
-                key={filename}
-                src={extractedImageUrl(filename)}
-                alt={filename}
-                style={{ maxWidth: 200, maxHeight: 200, border: "1px solid var(--border)", borderRadius: 4 }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
 
-      <pre
-        style={{
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          fontFamily: "inherit",
-          marginTop: "0.75rem",
-        }}
-      >
-        {draft.content}
-      </pre>
+      <div className="markdown-body" style={{ marginTop: "0.75rem" }}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // content references extracted images by bare filename, not a
+            // full URL — resolve against the API's static upload serving.
+            img: ({ src, alt }) => (
+              <img src={extractedImageUrl(String(src))} alt={alt} style={{ maxWidth: "100%" }} />
+            ),
+          }}
+        >
+          {draft.content}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
