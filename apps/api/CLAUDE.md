@@ -44,6 +44,12 @@ PostgreSQL. 스키마 전문은 `apps/api/migrations/0001_init_schema.up.sql`에
 
 각각 `internal/external/{naverdatalab,llm,fileparser}`에서 래핑한다.
 
+## 테스트
+
+- 일반 유닛 테스트: `go test ./...`
+- DB에 실제로 붙는 통합 테스트는 `//go:build integration` 태그로 분리해 기본 실행에서 제외한다(`internal/store/store_integration_test.go` 등). `github.com/fergusstrange/embedded-postgres`로 실제 Postgres 바이너리를 사용자 권한으로 띄워 검증한다 — Docker 접근 권한이 없는 환경(샌드박스 등)에서도 root/`docker` 그룹 없이 실행 가능해서 채택했다.
+- 실행: `go test -tags=integration ./...`
+
 ## 로컬 개발
 
 ```bash
