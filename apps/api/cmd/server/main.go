@@ -41,7 +41,28 @@ func main() {
 
 	addr := ":8080"
 	log.Printf("api server listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// withCORS reflects the request's Origin back as allowed. This API has no
+// auth/cookies (single-user internal tool per root CLAUDE.md), so there's
+// no cross-origin credential risk in allowing any origin — and the web app
+// is deployed on a different origin than the API (root CLAUDE.md section 6),
+// so CORS is needed beyond just local dev.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
