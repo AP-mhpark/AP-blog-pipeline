@@ -156,7 +156,7 @@ func (s *Store) ListDrafts(ctx context.Context, postID string) ([]Draft, error) 
 	}
 	defer rows.Close()
 
-	var drafts []Draft
+	drafts := []Draft{} // non-nil so an empty result marshals to [] rather than null
 	for rows.Next() {
 		var d Draft
 		if err := rows.Scan(

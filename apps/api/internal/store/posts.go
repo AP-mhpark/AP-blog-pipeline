@@ -110,7 +110,7 @@ func (s *Store) ListPosts(ctx context.Context) ([]Post, error) {
 	}
 	defer rows.Close()
 
-	var posts []Post
+	posts := []Post{} // non-nil so an empty result marshals to [] rather than null
 	for rows.Next() {
 		var post Post
 		if err := rows.Scan(
