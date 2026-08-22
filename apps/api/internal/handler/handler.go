@@ -29,6 +29,7 @@ const maxUploadBytes = 20 << 20 // 20MB
 // can inject a fake instead of making real Anthropic API calls.
 type draftGenerator interface {
 	GenerateDraft(ctx context.Context, in llm.DraftInput) (llm.DraftOutput, error)
+	ExtractKeyword(ctx context.Context, sourceText string) (string, error)
 }
 
 // blogSearcher is satisfied by *naversearch.Client. A narrow interface so
@@ -348,8 +349,20 @@ func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	query := searchQueryFor(post)
+	if post.InputMethod == pipeline.InputMethodFile {
+		// file_input has no keyword field, so category+subtype is only a
+		// coarse fallback — prefer a keyword actually extracted from the
+		// source text when that succeeds.
+		if extracted, err := h.llm.ExtractKeyword(ctx, sourceText); err != nil {
+			log.Printf("draftPost: extract keyword (non-fatal, falling back to category): %v", err)
+		} else {
+			query = extracted
+		}
+	}
+
 	var titles, snippets []string
-	if results, err := h.searcher.SearchBlogs(ctx, searchQueryFor(post), 5); err != nil {
+	if results, err := h.searcher.SearchBlogs(ctx, query, 5); err != nil {
 		log.Printf("draftPost: naver search (non-fatal): %v", err)
 	} else {
 		for _, res := range results {
