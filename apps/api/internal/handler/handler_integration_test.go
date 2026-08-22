@@ -36,10 +36,17 @@ import (
 type fakeLLM struct {
 	output llm.DraftOutput
 	err    error
+
+	keyword    string
+	keywordErr error
 }
 
 func (f *fakeLLM) GenerateDraft(ctx context.Context, in llm.DraftInput) (llm.DraftOutput, error) {
 	return f.output, f.err
+}
+
+func (f *fakeLLM) ExtractKeyword(ctx context.Context, sourceText string) (string, error) {
+	return f.keyword, f.keywordErr
 }
 
 type fakeSearcher struct {
@@ -221,6 +228,8 @@ func TestHandlerIntegration(t *testing.T) {
 			MetaTitle:       "테스트 제목 2",
 			MetaDescription: "테스트 설명 2",
 		}
+		fakeGenerator.keyword = "테스트 키워드"
+		fakeGenerator.keywordErr = nil
 		fakeBlogSearcher.err = errors.New("naver: timeout")
 		fakeBlogSearcher.results = nil
 
@@ -228,6 +237,27 @@ func TestHandlerIntegration(t *testing.T) {
 		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+researchedID+"/draft", nil, http.StatusCreated, &draft)
 		if draft["content"] != "본문 초안 2" {
 			t.Fatalf("got content %v, want draft despite search failure", draft["content"])
+		}
+	})
+
+	t.Run("draft succeeds even if keyword extraction fails (non-fatal, falls back to category)", func(t *testing.T) {
+		researchedID := uploadResearchedPost(t, srv)
+
+		fakeGenerator.err = nil
+		fakeGenerator.output = llm.DraftOutput{
+			Content:         "본문 초안 3",
+			MetaTitle:       "테스트 제목 3",
+			MetaDescription: "테스트 설명 3",
+		}
+		fakeGenerator.keyword = ""
+		fakeGenerator.keywordErr = errors.New("anthropic: rate limited")
+		fakeBlogSearcher.err = nil
+		fakeBlogSearcher.results = nil
+
+		var draft map[string]any
+		doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/posts/"+researchedID+"/draft", nil, http.StatusCreated, &draft)
+		if draft["content"] != "본문 초안 3" {
+			t.Fatalf("got content %v, want draft despite keyword extraction failure", draft["content"])
 		}
 	})
 
@@ -383,6 +413,8 @@ func draftToPendingReview(t *testing.T, srv *httptest.Server, gen *fakeLLM, sear
 		MetaTitle:       "테스트 제목",
 		MetaDescription: "테스트 설명",
 	}
+	gen.keyword = "테스트 키워드"
+	gen.keywordErr = nil
 	searcher.err = nil
 	searcher.results = nil
 
