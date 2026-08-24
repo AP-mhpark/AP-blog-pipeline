@@ -101,3 +101,15 @@ go run ./cmd/server
 ```
 
 `.env.example`을 복사해 `.env`를 만들고 값을 채운다(`DATABASE_URL`, `UPLOAD_DIR`, `NAVER_CLIENT_ID/SECRET`, `ANTHROPIC_API_KEY`).
+
+### 상시 구동 중 코드 갱신
+
+`deploy/systemd/blog-pipeline-api.service`로 상시 구동 중이라면(루트 CLAUDE.md 섹션 8 참고), `go run`이 아니라 컴파일된 바이너리를 systemd가 실행하고 있으므로 코드를 바꾼 뒤 재빌드가 필요하다:
+
+```bash
+git pull
+go build -o server ./cmd/server
+systemctl --user restart blog-pipeline-api
+```
+
+DB 스키마가 바뀐 커밋이면 재시작 전에 마이그레이션도 다시 적용한다.

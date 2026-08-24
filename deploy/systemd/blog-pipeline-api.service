@@ -1,0 +1,14 @@
+[Unit]
+Description=Blog Pipeline API
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/maeng/blog-pipeline/apps/api
+EnvironmentFile=/home/maeng/blog-pipeline/apps/api/.env
+ExecStart=/home/maeng/blog-pipeline/apps/api/server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
