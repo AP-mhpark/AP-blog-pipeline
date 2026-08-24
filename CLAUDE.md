@@ -87,7 +87,7 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 | DB | PostgreSQL | 스키마 상세는 `apps/api/CLAUDE.md` |
 | 트렌드 조사 | 네이버 데이터랩 API (1차) | 구글 트렌드는 공식 API 없음. 상세는 `apps/api/CLAUDE.md` |
 | 초안 생성 | Anthropic Claude API | 공식 Go SDK 사용. 상세는 `apps/api/CLAUDE.md` |
-| 배포 | > [자리표시] | Go: Fly.io/Railway 등, React: Vercel/Netlify 등 후보 |
+| 배포 | 클라우드 배포 안 함 | 1인용 로컬 전용 툴로 확정 — 로컬에서 systemd 사용자 서비스로 상시 구동. 절차는 섹션 8 및 `apps/api/CLAUDE.md` 참고 |
 
 ## 7. 개발 규칙
 
@@ -136,10 +136,12 @@ pending_review → needs_revision → drafting   (반려 시 재생성 루프)
 - 특히 PDF/엑셀 파서, LLM SDK 등은 검증된 라이브러리만 사용하고, 관리가 안 되는(unmaintained) 서드파티 패키지는 피한다.
 
 ### 환경 분리
-- local(개발) / production(개인 운영) 환경을 분리하고, 각각 별도의 DB와 `.env`를 사용한다.
+- 클라우드 배포 없이 로컬 1대에서만 운영하기로 확정 — local(개발 중 수동 실행)과 production(systemd 상시 구동)이 같은 로컬 DB·`.env`를 공유한다. 진짜 분리된 환경은 아니며, 이 정도로 충분하다고 판단.
 - 단일 사용자 내부 툴이므로 staging 환경은 필수는 아니며, 필요시에만 추가한다.
 
 ## 8. 로컬 개발
+
+### 개발 중 수동 실행
 
 ```bash
 # 1. DB 기동
@@ -156,3 +158,22 @@ cd apps/web && npm install && npm run dev
 ```
 
 각 앱의 `.env.example`을 복사해 `.env`를 만들고 값을 채운다 (`apps/api/.env.example`, `apps/web/.env.example`).
+
+### 상시 구동 (선택 — systemd 사용자 서비스)
+
+매번 터미널을 열어 `go run`/`npm run dev`를 직접 실행하지 않아도 되도록, 부팅/로그인 시 자동 기동 + 터미널을 닫아도 계속 실행되는 상시 구동 방식. 클라우드 배포 없이 이 로컬 1대에서만 쓴다는 전제(섹션 6·7 참고).
+
+```bash
+# API는 go run 대신 컴파일된 바이너리로 실행(deploy/systemd/blog-pipeline-api.service 참고)
+cd apps/api && go build -o server ./cmd/server
+
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/*.service ~/.config/systemd/user/
+# blog-pipeline-web.service의 ExecStart npm 경로를 `which npm` 결과로 맞게 수정
+
+systemctl --user daemon-reload
+systemctl --user enable --now blog-pipeline-api blog-pipeline-web
+loginctl enable-linger "$USER"   # 로그인 세션 없이도 부팅 시 자동 기동되게(권한 필요하면 sudo)
+```
+
+코드가 바뀐 뒤에는 `apps/api/CLAUDE.md`의 재빌드/재시작 절차를 따른다. 로그 확인은 `journalctl --user -u blog-pipeline-api -f` (웹은 `-u blog-pipeline-web`).
