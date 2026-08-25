@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,60 @@ import (
 )
 
 const maxUploadBytes = 20 << 20 // 20MB
+
+const (
+	// Observed: decorative arrow/bullet icons embedded in PDFs run
+	// 524B-4KB; real photos/maps/tables run 6KB+. This threshold filters
+	// the former out before they're sent to the LLM as vision input.
+	minDraftImageBytes = 5 * 1024
+	// Safety cap on vision payload/cost per draft call. Not a real
+	// constraint in practice — observed max individual image size is
+	// 64KB, so even 20 images is a trivial payload.
+	maxDraftImages = 20
+)
+
+// loadDraftImages reads extracted-image files off disk and base64-encodes
+// them so GenerateDraft can send them as vision input, letting the LLM judge
+// relevance by actually seeing the images instead of guessing from
+// filenames. Unreadable files, unsupported extensions, and images below
+// minDraftImageBytes are skipped non-fatally.
+func loadDraftImages(uploadDir string, filenames []string) []llm.DraftImage {
+	var images []llm.DraftImage
+	for _, name := range filenames {
+		if len(images) >= maxDraftImages {
+			break
+		}
+		mediaType, ok := imageMediaType(name)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(uploadDir, "images", name))
+		if err != nil {
+			log.Printf("loadDraftImages: read %s (non-fatal): %v", name, err)
+			continue
+		}
+		if len(data) < minDraftImageBytes {
+			continue
+		}
+		images = append(images, llm.DraftImage{
+			Filename:  name,
+			MediaType: mediaType,
+			Data:      base64.StdEncoding.EncodeToString(data),
+		})
+	}
+	return images
+}
+
+func imageMediaType(filename string) (string, bool) {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	default:
+		return "", false
+	}
+}
 
 // draftGenerator is satisfied by *llm.Client. A narrow interface so tests
 // can inject a fake instead of making real Anthropic API calls.
@@ -382,7 +437,7 @@ func (h *Handler) draftPost(w http.ResponseWriter, r *http.Request) {
 		SourceText:        sourceText,
 		ReferenceTitles:   titles,
 		ReferenceSnippets: snippets,
-		ExtractedImages:   extractedImages,
+		Images:            loadDraftImages(h.uploadDir, extractedImages),
 	})
 	if err != nil {
 		log.Printf("draftPost: generate draft: %v", err)
