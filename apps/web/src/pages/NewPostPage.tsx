@@ -15,6 +15,7 @@ export default function NewPostPage() {
   const [subtypeValue, setSubtypeValue] = useState("");
   const [keyword, setKeyword] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [captureImages, setCaptureImages] = useState<File[]>([]);
 
   const category = CATEGORIES.find((c) => c.value === categoryValue) ?? CATEGORIES[0];
 
@@ -36,6 +37,7 @@ export default function NewPostPage() {
         contentType: category.contentType,
         category: category.value,
         subtype: subtypeValue || undefined,
+        captureImages,
       });
     },
     onSuccess: (post) => {
@@ -109,15 +111,28 @@ export default function NewPostPage() {
             />
           </label>
         ) : (
-          <label>
-            파일 (PDF/엑셀)
-            <input
-              type="file"
-              accept=".pdf,.xlsx"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              required
-            />
-          </label>
+          <>
+            <label>
+              파일 (PDF/엑셀)
+              <input
+                type="file"
+                accept=".pdf,.xlsx"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                required
+              />
+            </label>
+
+            <label>
+              웹 캡처 이미지 (선택, 여러 장 가능)
+              <input
+                type="file"
+                accept=".png,.jpg,.jpeg"
+                multiple
+                onChange={(e) => setCaptureImages(Array.from(e.target.files ?? []))}
+              />
+            </label>
+            {captureImages.length > 0 && <p>{captureImages.length}개 선택됨</p>}
+          </>
         )}
 
         <button type="submit" disabled={mutation.isPending}>

@@ -102,6 +102,10 @@ export interface UploadFilePostInput {
   contentType: ContentType;
   category: string;
   subtype?: string;
+  // Optional screenshots of source web pages (e.g. supply-info tables or
+  // maps not present in the PDF) — merged server-side into the same image
+  // list as PDF-extracted images (see apps/api/CLAUDE.md "이미지 선택").
+  captureImages?: File[];
 }
 
 export function uploadFilePost(input: UploadFilePostInput): Promise<Post> {
@@ -111,6 +115,9 @@ export function uploadFilePost(input: UploadFilePostInput): Promise<Post> {
   form.set("category", input.category);
   if (input.subtype) {
     form.set("subtype", input.subtype);
+  }
+  for (const capture of input.captureImages ?? []) {
+    form.append("capture_images", capture);
   }
   return request<Post>("/posts/upload", { method: "POST", body: form });
 }

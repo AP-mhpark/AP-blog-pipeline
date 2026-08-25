@@ -162,6 +162,49 @@ func TestHandlerIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("upload with capture images merges them into research raw_data", func(t *testing.T) {
+		resp := uploadFileWithCaptures(t, srv.Client(), srv.URL, "notice.pdf", makeTestPDF(t), map[string][]byte{
+			"capture1.png": bytes.Repeat([]byte{0xFF}, 1024), // valid extension
+			"notes.txt":    []byte("not an image"),           // unsupported, should be skipped non-fatally
+		})
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("got status %d, want 201", resp.StatusCode)
+		}
+		var post map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&post); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		postID, _ := post["id"].(string)
+		if postID == "" {
+			t.Fatal("expected a generated ID")
+		}
+
+		research, err := s.GetLatestResearchResult(ctx, postID)
+		if err != nil {
+			t.Fatalf("get latest research result: %v", err)
+		}
+		var raw struct {
+			Images []string `json:"images"`
+		}
+		if err := json.Unmarshal(research.RawData, &raw); err != nil {
+			t.Fatalf("unmarshal raw_data: %v", err)
+		}
+
+		var sawCapture bool
+		for _, name := range raw.Images {
+			if strings.Contains(name, "-capture1.png") {
+				sawCapture = true
+			}
+			if strings.Contains(name, "notes.txt") || strings.Contains(name, "-capture2") {
+				t.Fatalf("unsupported capture file leaked into raw_data.images: %v", raw.Images)
+			}
+		}
+		if !sawCapture {
+			t.Fatalf("expected a capture1.png entry in raw_data.images, got %v", raw.Images)
+		}
+	})
+
 	t.Run("draft succeeds and reaches pending_review", func(t *testing.T) {
 		researchedID := uploadResearchedPost(t, srv)
 
@@ -462,6 +505,53 @@ func uploadFile(t *testing.T, client *http.Client, baseURL, filename string, con
 	}
 	if _, err := fw.Write(content); err != nil {
 		t.Fatalf("write file content: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/posts/upload", &buf)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+// uploadFileWithCaptures is like uploadFile but also attaches one or more
+// "capture_images" files (filename -> content), simulating the web-capture
+// upload field.
+func uploadFileWithCaptures(t *testing.T, client *http.Client, baseURL, filename string, content []byte, captures map[string][]byte) *http.Response {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("content_type", "informational"); err != nil {
+		t.Fatalf("write field: %v", err)
+	}
+	if err := w.WriteField("category", "생활정보_제도안내"); err != nil {
+		t.Fatalf("write field: %v", err)
+	}
+	fw, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		t.Fatalf("write file content: %v", err)
+	}
+	for name, data := range captures {
+		cw, err := w.CreateFormFile("capture_images", name)
+		if err != nil {
+			t.Fatalf("create capture form file: %v", err)
+		}
+		if _, err := cw.Write(data); err != nil {
+			t.Fatalf("write capture content: %v", err)
+		}
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)

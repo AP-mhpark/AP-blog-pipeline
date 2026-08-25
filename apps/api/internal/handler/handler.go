@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -67,6 +68,54 @@ func loadDraftImages(uploadDir string, filenames []string) []llm.DraftImage {
 		})
 	}
 	return images
+}
+
+// saveCaptureImages writes user-uploaded "web capture" screenshots (multipart
+// field "capture_images") into uploadDir/images alongside PDF-extracted
+// images, so both flow through the same drafting pipeline. Unsupported
+// extensions and unreadable files are skipped non-fatally (log only) —
+// these are optional supplementary material, not the primary upload.
+func saveCaptureImages(uploadDir, namePrefix string, headers []*multipart.FileHeader) []string {
+	if len(headers) == 0 {
+		return nil
+	}
+	imagesDir := filepath.Join(uploadDir, "images")
+	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
+		log.Printf("saveCaptureImages: mkdir %s (non-fatal): %v", imagesDir, err)
+		return nil
+	}
+
+	var names []string
+	for i, fh := range headers {
+		if _, ok := imageMediaType(fh.Filename); !ok {
+			log.Printf("saveCaptureImages: skip unsupported file %s (non-fatal)", fh.Filename)
+			continue
+		}
+
+		src, err := fh.Open()
+		if err != nil {
+			log.Printf("saveCaptureImages: open %s (non-fatal): %v", fh.Filename, err)
+			continue
+		}
+
+		name := fmt.Sprintf("%s-capture%d%s", namePrefix, i+1, strings.ToLower(filepath.Ext(fh.Filename)))
+		dst, err := os.Create(filepath.Join(imagesDir, name))
+		if err != nil {
+			src.Close()
+			log.Printf("saveCaptureImages: create %s (non-fatal): %v", name, err)
+			continue
+		}
+		_, copyErr := io.Copy(dst, src)
+		src.Close()
+		dst.Close()
+		if copyErr != nil {
+			log.Printf("saveCaptureImages: write %s (non-fatal): %v", name, copyErr)
+			continue
+		}
+
+		names = append(names, name)
+	}
+	return names
 }
 
 func imageMediaType(filename string) (string, bool) {
@@ -317,20 +366,31 @@ func (h *Handler) uploadFilePost(w http.ResponseWriter, r *http.Request) {
 
 	if parseErr == nil {
 		var rawData json.RawMessage
+		var images []string
 		if fileType == "pdf" {
 			// Best-effort: most government notices' tables/figures are
 			// native PDF text+lines rather than embedded images, so an
 			// empty result here is normal, not an error. A failure here
 			// doesn't fail the upload — text extraction already succeeded.
-			images, imgErr := fileparser.ExtractPDFImages(storagePath, filepath.Join(h.uploadDir, "images"), namePrefix)
+			pdfImages, imgErr := fileparser.ExtractPDFImages(storagePath, filepath.Join(h.uploadDir, "images"), namePrefix)
 			if imgErr != nil {
 				log.Printf("uploadFilePost: extract images (non-fatal): %v", imgErr)
-			} else if len(images) > 0 {
-				if b, err := json.Marshal(researchRawData{Images: images}); err == nil {
-					rawData = b
-				} else {
-					log.Printf("uploadFilePost: marshal image list (non-fatal): %v", err)
-				}
+			} else {
+				images = append(images, pdfImages...)
+			}
+		}
+		// User-supplied screenshots of source web pages (e.g. supply-info
+		// tables or maps not present in the PDF) — not restricted to PDF
+		// uploads, and merged into the same image list the PDF-extracted
+		// images use, so drafting treats them identically (see
+		// llm.DraftInput.Images / loadDraftImages).
+		images = append(images, saveCaptureImages(h.uploadDir, namePrefix, r.MultipartForm.File["capture_images"])...)
+
+		if len(images) > 0 {
+			if b, err := json.Marshal(researchRawData{Images: images}); err == nil {
+				rawData = b
+			} else {
+				log.Printf("uploadFilePost: marshal image list (non-fatal): %v", err)
 			}
 		}
 

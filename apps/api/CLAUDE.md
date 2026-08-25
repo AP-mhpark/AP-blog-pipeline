@@ -71,7 +71,7 @@ developers.naver.com "API 제휴 신청" 페이지 기준:
 | `GET /posts/{id}` | 단건 조회 (없으면 404) |
 | `DELETE /posts/{id}` | 삭제(204). 관련 데이터(업로드 파일 레코드, 조사 결과, 초안, 리뷰 기록, 상태 이력)는 FK `ON DELETE CASCADE`로 함께 삭제. 상태 제한 없음(1인용 내부 툴이라 테스트/실수 데이터를 언제든 지울 수 있어야 함) |
 | `POST /posts` | 키워드 입력 생성 (`content_type`, `category`, `subtype?`, `keyword` JSON). `status=researching`으로 생성만 하고 끝 — **네이버 데이터랩 조사 실행은 아직 없음**(스텁), 상태가 자동으로 진행되지 않는다 |
-| `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장. PDF는 텍스트와 함께 내장 이미지도 추출(`fileparser.ExtractPDFImages`, 비치명적) → `research_results.raw_data`에 `{"images": [...]}`로 기록 |
+| `POST /posts/upload` | PDF/엑셀 업로드(multipart: `file`, `content_type`, `category`, `subtype?`, `capture_images?`(같은 키로 여러 장 가능)). 저장 → `fileparser`로 텍스트 추출 → 성공 시 `status=researched`, 실패 시 `status=failed_file_parsing` + 에러 메시지. 둘 다 201 응답, 파일은 `UPLOAD_DIR`에 저장. PDF는 텍스트와 함께 내장 이미지도 추출(`fileparser.ExtractPDFImages`, 비치명적). `capture_images`는 PDF에 없는 정보(공고 사이트의 표·지도 등)를 사용자가 직접 캡처해 첨부하는 선택 필드로, 파일 종류(PDF/엑셀) 무관하게 받는다(`handler.saveCaptureImages`, 비치명적, 지원 확장자 아니면 조용히 스킵) → 둘 다 같은 목록으로 합쳐져 `research_results.raw_data`에 `{"images": [...]}`로 기록 |
 | `POST /posts/{id}/draft` | 초안 생성/재생성. `researched`/`needs_revision` 상태에서만 가능(그 외 400). file_input 글은 검색 쿼리를 `llm.ExtractKeyword`(Haiku, 원문에서 키워드 한 줄 추출)로 정하고 실패하면 `category+subtype` 폴백(비치명적) — keyword_input 글은 그대로 `input_keyword` 사용. 그 쿼리로 `naversearch` 상위노출 제목/스니펫 조회(실패해도 무시하고 진행 — 보강 기능이라 단일 장애점 아님) → `llm.GenerateDraft`(Anthropic tool_use로 구조화된 출력. 추출된 이미지는 파일명이 아니라 실제 픽셀(base64, vision 입력)로 함께 전달해 LLM이 직접 보고 관련성을 판단 — 아래 "이미지 선택(vision)" 참고) → 성공 시 `drafts`에 새 버전 저장 후 `draft_ready`→`pending_review`까지 자동 연쇄 전이. LLM 호출(초안 생성) 실패는 치명적(`failed_drafting` + 에러 메시지, 502) |
 | `GET /posts/{id}/drafts` | 해당 글의 모든 초안 버전(최신순). `used_images` 필드에 본문에서 실제 참조한 추출 이미지 파일명 목록(DB 컬럼명은 `image_alts` 그대로, 마이그레이션 없이 의미만 재정의) |
 | `GET /uploads/{path}` | 업로드 원본 파일 + 추출 이미지 정적 서빙(`UPLOAD_DIR` 그대로 노출). 인증 없는 1인용 툴이고 원문이 공개 공고문이라 문제 없음 |
@@ -89,6 +89,8 @@ developers.naver.com "API 제휴 신청" 페이지 기준:
 - `maxDraftImages`(20): vision 페이로드/비용 안전장치. 실측 최대 개별 이미지가 64KB라 이 값 자체가 실질적 제약이 되는 경우는 거의 없음.
 
 지원 확장자는 `.png`/`.jpg`/`.jpeg`뿐 — 그 외 확장자나 읽기 실패한 파일은 비치명적으로 스킵한다.
+
+PDF 추출 이미지와 사용자가 업로드한 웹페이지 캡처 이미지(`capture_images`)는 동일한 `images` 목록으로 합쳐져 위 필터링을 거쳐 LLM에 전달된다 — 별도 구분 없이 같은 vision 파이프라인을 탄다. 어떤 캡처가 "정보를 텍스트로 읽어야 할 표"이고 어떤 캡처가 "그대로 삽입해도 될 사진/지도"인지는 시스템 프롬프트로 LLM이 판단한다(`llm.draftSystemPrompt`).
 
 ## 테스트
 
