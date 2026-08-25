@@ -20,7 +20,15 @@ type DraftInput struct {
 	SourceText        string   // extracted PDF/Excel text (from fileparser)
 	ReferenceTitles   []string // top-ranking blog titles for the target keyword
 	ReferenceSnippets []string // matching descriptions/snippets
-	ExtractedImages   []string // filenames of images embedded in the source PDF (fileparser.ExtractPDFImages)
+	Images            []DraftImage
+}
+
+// DraftImage is an extracted image sent as vision input so Claude can judge
+// relevance by actually seeing it, rather than guessing from a filename.
+type DraftImage struct {
+	Filename  string
+	MediaType string // "image/png" | "image/jpeg"
+	Data      string // base64-encoded bytes
 }
 
 // DraftOutput is the structured result of a drafting call.
@@ -28,7 +36,7 @@ type DraftOutput struct {
 	Content         string   `json:"content"`
 	MetaTitle       string   `json:"meta_title"`
 	MetaDescription string   `json:"meta_description"`
-	UsedImages      []string `json:"used_images"` // subset of DraftInput.ExtractedImages actually referenced in Content
+	UsedImages      []string `json:"used_images"` // subset of DraftInput.Images actually referenced in Content
 }
 
 // GenerateDraft asks Claude to produce a blog draft from in, using
@@ -62,6 +70,15 @@ func (c *Client) GenerateDraft(ctx context.Context, in DraftInput) (DraftOutput,
 		},
 	}
 
+	var blocks []anthropic.ContentBlockParamUnion
+	for _, img := range in.Images {
+		blocks = append(blocks,
+			anthropic.NewTextBlock(fmt.Sprintf("파일명: %s", img.Filename)),
+			anthropic.NewImageBlockBase64(img.MediaType, img.Data),
+		)
+	}
+	blocks = append(blocks, anthropic.NewTextBlock(buildDraftUserPrompt(in)))
+
 	message, err := c.api.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     defaultModel,
 		MaxTokens: 8192,
@@ -69,7 +86,7 @@ func (c *Client) GenerateDraft(ctx context.Context, in DraftInput) (DraftOutput,
 			{Text: draftSystemPrompt},
 		},
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(buildDraftUserPrompt(in))),
+			anthropic.NewUserMessage(blocks...),
 		},
 		Tools:      []anthropic.ToolUnionParam{{OfTool: &tool}},
 		ToolChoice: anthropic.ToolChoiceParamOfTool(draftToolName),
@@ -103,7 +120,7 @@ const draftSystemPrompt = `당신은 한국어 생활정보 블로그 글을 작
 - "누가 특히 유리한지"를 원문 근거를 들어 서술형으로 분석합니다. 개인화된 계산기가 아니라 글 안의 설명이라는 점을 유지합니다.
 - 함께 제공되는 "참고 상위노출 제목/스니펫"은 표절하지 말고, 문체·어조·독자가 궁금해하는 포인트를 파악하는 용도로만 참고합니다.
 - 소득기준표·일정표처럼 표로 정리하는 게 나은 정보는 마크다운 표 문법으로 작성합니다. 표를 이미지로 대체하지 않습니다.
-- 이미지는 새로 만들어내지 않습니다. 함께 제공되는 "원문에서 추출된 이미지 파일명" 목록 중 본문과 실제로 관련 있는 것만, 목록에 있는 파일명 그대로 ![대체텍스트](파일명) 형식으로 본문에 삽입합니다. 목록에 없는 파일명을 지어내지 않고, 관련 있는 이미지가 없으면 삽입하지 않습니다.
+- 이미지는 새로 만들어내지 않습니다. 메시지에 원문 PDF에서 추출된 이미지가 실제로 첨부되어 있다면, 그 이미지들을 직접 보고 본문과 실제로 관련 있는 것만(예: 위치를 보여주는 지도, 실사진) 선택합니다. 장식용 아이콘·화살표·불릿 같은 이미지는 제외합니다. 삽입할 때는 각 이미지 직전에 표시된 "파일명: ..." 텍스트의 파일명을 그대로 써서 ![대체텍스트](파일명) 형식으로 본문에 넣습니다. 그 파일명이 아닌 다른 파일명을 지어내지 않고, 관련 있는 이미지가 없으면 삽입하지 않습니다.
 - 결과는 반드시 emit_draft 도구 호출로 제출합니다.`
 
 func buildDraftUserPrompt(in DraftInput) string {
@@ -131,11 +148,9 @@ func buildDraftUserPrompt(in DraftInput) string {
 		b.WriteString("\n")
 	}
 
-	if len(in.ExtractedImages) > 0 {
-		b.WriteString("=== 원문에서 추출된 이미지 파일명 (관련 있는 것만 선택해서 사용) ===\n")
-		for _, name := range in.ExtractedImages {
-			b.WriteString(name + "\n")
-		}
+	if len(in.Images) > 0 {
+		b.WriteString("=== 첨부 이미지 안내 ===\n")
+		b.WriteString("위 메시지에 원문 PDF에서 추출된 이미지들이 실제로 첨부되어 있습니다. 각 이미지 바로 앞의 \"파일명: ...\" 텍스트가 그 이미지의 정확한 파일명입니다. 본문과 실제로 관련 있는 이미지만 그 파일명 그대로 ![대체텍스트](파일명) 형식으로 삽입하세요.\n\n")
 	}
 
 	return b.String()
