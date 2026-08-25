@@ -157,7 +157,7 @@ export default function PostDetailPage() {
           {latestDraft && (
             <div style={{ marginTop: "1.5rem" }}>
               <h2>초안</h2>
-              <DraftView draft={latestDraft} />
+              <DraftView draft={latestDraft} showCopyButton={post.status === "approved"} />
             </div>
           )}
 
