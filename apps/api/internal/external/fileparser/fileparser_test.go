@@ -64,6 +64,17 @@ func TestExtractExcelText(t *testing.T) {
 	}
 }
 
+func TestStripNulBytes(t *testing.T) {
+	// Some PDFs' font/encoding tables decode to NUL bytes, which
+	// PostgreSQL's TEXT type rejects outright (SQLSTATE 22021) — this must
+	// never reach the store layer.
+	got := stripNulBytes("자격요건\x00: 무주택\x00세대주\x00")
+	want := "자격요건: 무주택세대주"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestExtractPDFImages(t *testing.T) {
 	// Blank single-page PDF, then overlay a tiny in-memory PNG so there's an
 	// embedded image object to extract.
