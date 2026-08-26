@@ -163,9 +163,9 @@ func TestHandlerIntegration(t *testing.T) {
 	})
 
 	t.Run("upload with capture images merges them into research raw_data", func(t *testing.T) {
-		resp := uploadFileWithCaptures(t, srv.Client(), srv.URL, "notice.pdf", makeTestPDF(t), map[string][]byte{
-			"capture1.png": bytes.Repeat([]byte{0xFF}, 1024), // valid extension
-			"notes.txt":    []byte("not an image"),           // unsupported, should be skipped non-fatally
+		resp := uploadFileWithCaptures(t, srv.Client(), srv.URL, "notice.pdf", makeTestPDF(t), []captureFile{
+			{name: "capture1.png", data: bytes.Repeat([]byte{0xFF}, 1024)}, // valid extension
+			{name: "notes.txt", data: []byte("not an image")},              // unsupported, should be skipped non-fatally
 		})
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
@@ -191,17 +191,21 @@ func TestHandlerIntegration(t *testing.T) {
 			t.Fatalf("unmarshal raw_data: %v", err)
 		}
 
+		// The saved filename's numeric suffix (-capture1/-capture2) depends
+		// on position among all submitted capture files including skipped
+		// ones, so only assert on the parts that are actually guaranteed:
+		// a .png capture made it in, and nothing derived from notes.txt did.
 		var sawCapture bool
 		for _, name := range raw.Images {
-			if strings.Contains(name, "-capture1.png") {
+			if strings.HasSuffix(name, "-capture1.png") || strings.HasSuffix(name, "-capture2.png") {
 				sawCapture = true
 			}
-			if strings.Contains(name, "notes.txt") || strings.Contains(name, "-capture2") {
+			if strings.Contains(name, "notes") || strings.HasSuffix(name, ".txt") {
 				t.Fatalf("unsupported capture file leaked into raw_data.images: %v", raw.Images)
 			}
 		}
 		if !sawCapture {
-			t.Fatalf("expected a capture1.png entry in raw_data.images, got %v", raw.Images)
+			t.Fatalf("expected a capture png entry in raw_data.images, got %v", raw.Images)
 		}
 	})
 
@@ -523,10 +527,17 @@ func uploadFile(t *testing.T, client *http.Client, baseURL, filename string, con
 	return resp
 }
 
+// captureFile is one "capture_images" attachment for uploadFileWithCaptures.
+// A slice (not a map) so submission order — and therefore the saved
+// filenames' numeric suffixes — is deterministic across test runs.
+type captureFile struct {
+	name string
+	data []byte
+}
+
 // uploadFileWithCaptures is like uploadFile but also attaches one or more
-// "capture_images" files (filename -> content), simulating the web-capture
-// upload field.
-func uploadFileWithCaptures(t *testing.T, client *http.Client, baseURL, filename string, content []byte, captures map[string][]byte) *http.Response {
+// "capture_images" files, simulating the web-capture upload field.
+func uploadFileWithCaptures(t *testing.T, client *http.Client, baseURL, filename string, content []byte, captures []captureFile) *http.Response {
 	t.Helper()
 
 	var buf bytes.Buffer
@@ -544,12 +555,12 @@ func uploadFileWithCaptures(t *testing.T, client *http.Client, baseURL, filename
 	if _, err := fw.Write(content); err != nil {
 		t.Fatalf("write file content: %v", err)
 	}
-	for name, data := range captures {
-		cw, err := w.CreateFormFile("capture_images", name)
+	for _, cf := range captures {
+		cw, err := w.CreateFormFile("capture_images", cf.name)
 		if err != nil {
 			t.Fatalf("create capture form file: %v", err)
 		}
-		if _, err := cw.Write(data); err != nil {
+		if _, err := cw.Write(cf.data); err != nil {
 			t.Fatalf("write capture content: %v", err)
 		}
 	}

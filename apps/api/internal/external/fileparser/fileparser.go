@@ -18,7 +18,7 @@ func ExtractPDFText(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("extract pdf text: %w", err)
 	}
-	return text, nil
+	return stripNulBytes(text), nil
 }
 
 // ExtractExcelText reads every sheet of the Excel file at path and serializes
@@ -42,5 +42,13 @@ func ExtractExcelText(path string) (string, error) {
 			sb.WriteString("\n")
 		}
 	}
-	return sb.String(), nil
+	return stripNulBytes(sb.String()), nil
+}
+
+// stripNulBytes removes NUL bytes that some PDFs' odd font/encoding tables
+// can produce in extracted text — PostgreSQL's TEXT type rejects them
+// outright (SQLSTATE 22021), so they must be gone before the text reaches
+// the store layer.
+func stripNulBytes(s string) string {
+	return strings.ReplaceAll(s, "\x00", "")
 }
